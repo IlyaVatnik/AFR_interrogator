@@ -18,6 +18,9 @@ Created on Fri Oct 17 14:19:23 2025
 
 @author: ChatGPT5 @ Ilya
 """
+__version__='1.0'
+__date__='27.10.2025'
+
 
 import socket
 import struct

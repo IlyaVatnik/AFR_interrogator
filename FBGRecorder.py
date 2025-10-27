@@ -17,6 +17,11 @@ FBGrecorder.py — безопасная безголовая запись пот
 Live-плот: live_plot_wavelengths(it, channel, fbg_indices, ...) — запускайте из главного потока GUI.
 """
 
+__version__='1.0'
+__date__='27.10.2025'
+
+
+
 from __future__ import annotations
 
 import os
