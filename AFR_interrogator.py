@@ -1,22 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Created on Mon Oct 27 18:55:35 2025
 
-@author: User
-"""
-
-# -*- coding: utf-8 -*-
-"""
-Created on Fri Oct 24 20:27:05 2025
-
-@author: User
-"""
-
-# -*- coding: utf-8 -*-
-"""
 Created on Fri Oct 17 14:19:23 2025
 
 @author: ChatGPT5 @ Ilya
+
+For the AFR Arcadia Optronix Interrogator
 """
 __version__='1.0'
 __date__='27.10.2025'
@@ -27,7 +16,7 @@ import struct
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 from collections import deque
 import numpy as np
 import math
@@ -447,7 +436,7 @@ class Interrogator:
 
     def read_single_channel_adc(self, channel: int, timeout: float = 1.0) -> dict:
         # Разовый запрос ADC по одному каналу (2.3.4).
-        # Формат ответа в разных прошивках различается — ниже эвристика.
+        # TODO: распарсить содержимое пакета согласно мануалу
         if channel < 1 or channel > 16:
             raise ValueError("Channel must be 1..16")
         ch_code = (channel - 1) & 0xFF
@@ -539,7 +528,7 @@ class Interrogator:
           Далее по каналам подряд, без отдельного заголовка канала:
             для fbg in range(self.fbg_per_ch):
               [PeakID:1][Freq_u24_BE:3]
-            [Temp_u16_BE:2]  # температура канала — ВАЖНО: 2 байта (раньше ошибочно читали 1)
+            [Temp_u16_BE:2]  # температура канала —  2 байта
 
         Интерпретация частоты:
           - Freq_u24_BE — 24-битное беззнаковое big-endian значение.
@@ -551,9 +540,6 @@ class Interrogator:
         Пустые слоты FBG:
           - Передаются как PeakID=N, Freq_u24=0x000000 — интерпретируем как «нет пика», ставим NaN.
 
-        Важно:
-          - Неправильное чтение температуры как 1 байта приводит к сдвигу смещения,
-            из-за чего данные со 2-го канала «едут». Здесь читаем 2 байта u16 BE строго.
         """
         try:
             # Проверка заголовка и минимальной длины (ID/FC + 4B резерва)
@@ -673,7 +659,7 @@ class Interrogator:
     def _parse_debug_frame(self, data: bytes) -> dict:
         # Формат 2.3.3 (по мануалу): 0x30 0x03 ... затем по каналу:
         # ChIndex(1B), Gain(1B), далее 2551*2B ADC значений (u16 BE).
-        # Важно: точная структура может отличаться по прошивкам — это ориентировочная реализация.
+        # TODO: распарсить содержимое debug-пакета согласно мануалу
         ch = self.channels
         payload = data[2:]
         # На некоторых прошивках присутствуют 2 байта длины — сдвиг на 2
@@ -703,7 +689,7 @@ class Interrogator:
 
     def _parse_adc_single(self, data: bytes) -> dict:
         # 2.3.4: ответ содержит: ... ChannelNo/Gain (вариативно по прошивке) + ADC1..ADC2551 (u16)
-        # Ниже — «универсальная» попытка распознать полезную нагрузку.
+        # TODO: распарсить содержимое debug-пакета согласно мануалу
         adc_count = 2551
         adc_bytes = adc_count * 2
         # Смещение полезной нагрузки зависит от реализации прошивки — пробуем две схемы
@@ -781,31 +767,6 @@ if __name__ == "__main__":
     data=data[ch-1]
     print(time_stamp,data)
     it.stop()
-    
-    #%%
-    # Сбор данных 5 секунд
-    ch=2
-    it.set_gain(ch, auto=True, manual_level=1)
-    it.set_threshold(ch, 2200)
-    time.sleep(0.1)
-    it.start_freq_stream()
-    count = record_fbg_stream_raw(it, "fbg_dump.pkl", duration_sec=15.0)
-    it.stop()
-    print("written:", count)
-    
-    # Загрузка
-    #%%
-    times, chans = read_fbg_stream_raw("fbg_dump.pkl")
-    print("samples:", len(times))              # N
-    print("channels:", len(chans))             # число каналов
-    print("shape ch1:", chans[0].shape)        # (fbg_per_ch, N)
-    
-    import matplotlib.pyplot as plt
-    plt.plot(times-times[0],chans[1][2])
-    plt.xlabel('Time, s')
-    plt.ylabel('FBG wavelength, nm')
-    acq_rate=1/np.mean(np.diff(times))
-    print(acq_rate, 'Hz')
     
    
     
