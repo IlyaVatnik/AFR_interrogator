@@ -9,8 +9,8 @@ import serial
 import time
 from typing import Optional, Dict, Any
 
-__version__='1.0'
-__date__='28.10.2025'
+__version__='1.1'
+__date__='30.10.2025'
 
 
 def ip_to_bytes(ip: str) -> bytes:
@@ -28,17 +28,6 @@ def mac_to_bytes(mac: str) -> bytes:
     return bytes(parts)
 
 
-def bytes_to_ip(b: bytes) -> str:
-    if len(b) != 4:
-        raise ValueError("Ожидалось 4 байта для IP")
-    return ".".join(str(x) for x in b)
-
-
-def bytes_to_mac(b: bytes) -> str:
-    if len(b) != 6:
-        raise ValueError("Ожидалось 6 байт для MAC")
-    return ":".join(f"{x:02X}" for x in b)
-
 
 class AFRConfiguratorRS232:
     """
@@ -54,7 +43,7 @@ class AFRConfiguratorRS232:
 
     # Константы протокола
     ID_PC_QUERY = 0x10
-    ID_MODULE_QUERY_RESP = 0x13
+    ID_MODULE_QUERY_RESP = 0x10
     FC_QUERY = 0x01
 
     ID_PC_SET = 0x20
@@ -71,6 +60,7 @@ class AFRConfiguratorRS232:
         self.baudrate = baudrate
         self.timeout = timeout
         self.ser: Optional[serial.Serial] = None
+        self.open()
 
     # --- Управление портом ---
 
@@ -83,6 +73,8 @@ class AFRConfiguratorRS232:
             timeout=self.timeout,
             bytesize=serial.EIGHTBITS,
             parity=serial.PARITY_NONE,
+            # parity=serial.PARITY_EVEN,
+            # parity=serial.PARITY_ODD,
             stopbits=serial.STOPBITS_ONE,
         )
 
@@ -115,6 +107,9 @@ class AFRConfiguratorRS232:
             raise RuntimeError("COM-порт не открыт")
         return self.ser.read(n)
 
+
+
+
     # --- Query ---
 
     def build_query_frame(self) -> bytes:
@@ -124,32 +119,7 @@ class AFRConfiguratorRS232:
         """
         return bytes([self.ID_PC_QUERY, self.FC_QUERY, 0x04, 0x00])
 
-    @staticmethod
-    def _parse_query_payload(payload: bytes) -> Optional[Dict[str, Any]]:
-        """
-        Ожидаем минимум: [TYPE][0x00][DATA...]
-        TYPE: 1=SRC_IP(4), 2=DST_IP(4), 3=SRC_PORT(2), 4=DST_PORT(2), 5=MAC(6)
-        """
-        if len(payload) < 2:
-            return None
-        typ = payload[0]
-        if payload[1] != 0x00:
-            # NC по таблице = 0x00
-            return None
-        data = payload[2:]
-        if typ == AFRConfiguratorRS232.TYPE_SRC_IP and len(data) >= 4:
-            return {"src_ip": bytes_to_ip(data[:4])}
-        if typ == AFRConfiguratorRS232.TYPE_DST_IP and len(data) >= 4:
-            return {"dst_ip": bytes_to_ip(data[:4])}
-        if typ == AFRConfiguratorRS232.TYPE_SRC_PORT and len(data) >= 2:
-            port = (data[0] << 8) | data[1]
-            return {"src_port": port}
-        if typ == AFRConfiguratorRS232.TYPE_DST_PORT and len(data) >= 2:
-            port = (data[0] << 8) | data[1]
-            return {"dst_port": port}
-        if typ == AFRConfiguratorRS232.TYPE_MAC and len(data) >= 6:
-            return {"mac": bytes_to_mac(data[:6])}
-        return None
+
 
     def query_settings(self, wait_total: float = 1.0) -> Dict[str, Any]:
         """
@@ -165,53 +135,26 @@ class AFRConfiguratorRS232:
 
         # Ждём несколько фреймов с ID=0x13,FC=0x01
         while time.time() - t0 < wait_total:
-            piece = self._read_some(256)
-            if not piece:
+            buf = self._read_some(256)
+            if not buf:
                 continue
-            buf += piece
-
-            # Парсим возможные фреймы: [0x13][0x01][LEN][...LEN байт...]
-            # LEN — длина payload. Из таблицы это «Command Length».
-            i = 0
-            while i + 3 <= len(buf):
-                if buf[i] != self.ID_MODULE_QUERY_RESP or buf[i + 1] != self.FC_QUERY:
-                    i += 1
-                    continue
-                ln = buf[i + 2]
-                end = i + 3 + ln
-                if end > len(buf):
-                    # ждём догрузки
-                    break
-                payload = bytes(buf[i + 3:end])
-                parsed = self._parse_query_payload(payload)
-                if parsed:
-                    result.update(parsed)
-                i = end  # следующий фрейм
-
-            # чистим обработанное начало буфера
-            if i > 0:
-                del buf[:i]
-
-            # если мы уже собрали все поля — можно выходить
-            have = {"src_ip", "dst_ip", "src_port", "dst_port", "mac"}
-            if have.issubset(result.keys()):
-                break
-
+            
+            
+            if buf[0] != self.ID_MODULE_QUERY_RESP or buf[1] != self.FC_QUERY:
+                continue
+            total_len = int.from_bytes(buf[ 2:4], "big")
+            result['src_ip']=(".".join(str(x) for x in buf[4:8]))
+            result['src_port']= (buf[8] << 8) | buf[9]
+            result['dst_ip']= (".".join(str(x) for x in buf[10:14]))
+            result['dst_port']= (buf[14] << 8) | buf[15]
+            result['MAC']= ":".join(f"{x:02X}" for x in buf[16:22])
+            
+            
         return result
 
     # --- Setting ---
 
-    def _build_set_frame(self, field_type: int, data: bytes) -> bytes:
-        """
-        Формат (таблица 3.2):
-          [ID=0x20][FC=0x01][TYPE][LEN][DATA...]
-        LEN — длина DATA в байтах.
-        """
-        if not (0 <= field_type <= 0xFF):
-            raise ValueError("Некорректный тип поля")
-        if not (0 <= len(data) <= 0xFF):
-            raise ValueError("Длина данных >255 — не поддерживается протоколом")
-        return bytes([self.ID_PC_SET, self.FC_SET, field_type & 0xFF, len(data) & 0xFF]) + data
+ 
 
     def _send_set_and_wait_ack(self, frame: bytes, ack_timeout: float = 0.5) -> bool:
         """
@@ -228,56 +171,41 @@ class AFRConfiguratorRS232:
                 buf += piece
                 # Простейшая эвристика успеха:
                 # Ищем любую подпоследовательность вида [0x20][0x01][..][0x00]
-                if b"\x20\x01" in buf and b"\x00" in buf:
+                if buf[5]==0x01:
+                    print('Параметры успешно установлены')
                     return True
+                elif buf[5]==0x00:
+                    print('Параметры не установлены')
+                    return False
+                
         # Если ACK не распознан, не считаем это фатальным — возвращаем False.
         return False
 
     def set_settings(self,
                      src_ip: Optional[str] = None,
-                     src_port: Optional[int] = None,
-                     dst_ip: Optional[str] = None,
+                     dst_ip: Optional[str] = '192.168.0.1',
+                     src_port: Optional[int] = 4567,
                      dst_port: Optional[int] = 8001,
-                     mac: Optional[str] = '00:08:AC:FF:FF:FF',
+                     mac: Optional[str] = '00:08:04:FE:DB:B6',
                      per_field_ack: bool = True) -> Dict[str, bool]:
         """
         Устанавливает переданные параметры. Возвращает dict с результатами по полям.
         Отправляются только те поля, которые не None.
         """
-        results: Dict[str, bool] = {}
-
-        if src_ip is not None:
-            fr = self._build_set_frame(self.TYPE_SRC_IP, ip_to_bytes(src_ip))
-            ok = self._send_set_and_wait_ack(fr) if per_field_ack else (self._write(fr) or True)
-            results["src_ip"] = bool(ok)
-
-        if dst_ip is not None:
-            fr = self._build_set_frame(self.TYPE_DST_IP, ip_to_bytes(dst_ip))
-            ok = self._send_set_and_wait_ack(fr) if per_field_ack else (self._write(fr) or True)
-            results["dst_ip"] = bool(ok)
-
-        if src_port is not None:
-            if not (0 <= src_port <= 65535):
-                raise ValueError("src_port вне диапазона 0..65535")
-            fr = self._build_set_frame(self.TYPE_SRC_PORT, bytes([(src_port >> 8) & 0xFF, src_port & 0xFF]))
-            ok = self._send_set_and_wait_ack(fr) if per_field_ack else (self._write(fr) or True)
-            results["src_port"] = bool(ok)
-
-        if dst_port is not None:
-            if not (0 <= dst_port <= 65535):
-                raise ValueError("dst_port вне диапазона 0..65535")
-            fr = self._build_set_frame(self.TYPE_DST_PORT, bytes([(dst_port >> 8) & 0xFF, dst_port & 0xFF]))
-            ok = self._send_set_and_wait_ack(fr) if per_field_ack else (self._write(fr) or True)
-            results["dst_port"] = bool(ok)
-
-        if mac is not None:
-            fr = self._build_set_frame(self.TYPE_MAC, mac_to_bytes(mac))
-            ok = self._send_set_and_wait_ack(fr) if per_field_ack else (self._write(fr) or True)
-            results["mac"] = bool(ok)
-
-        return results
-    
+        
+        
+        fr=bytes([0x20,0x01,0x16])+ip_to_bytes(src_ip)+src_port.to_bytes(2)+ip_to_bytes(dst_ip)+dst_port.to_bytes(2) + mac_to_bytes(mac)
+        
+        ok = self._send_set_and_wait_ack(fr)
+        
+        return ok
+   #%%
 if __name__ == "__main__":
-    it=AFRConfiguratorRS232('COM1')
+    it=AFRConfiguratorRS232('COM5')
+    #%%
     settings=it.query_settings()
     print(settings)
+
+#%%
+
+    it.set_settings(src_ip='10.2.60.34')

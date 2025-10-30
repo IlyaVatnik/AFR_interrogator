@@ -6,35 +6,34 @@ Created on Mon Oct 27 21:08:48 2025
 """
 
 import matplotlib
-matplotlib.use("Qt5Agg")  # или TkAgg
+matplotlib.use("TkAgg")  # или TkAgg
 from AFR_interrogator.FBGRecorder import record_and_plot
 from AFR_interrogator.AFR_interrogator import Interrogator
-import time
-import numpy as np
 
 
-it = Interrogator()
+
+it = Interrogator('10.2.60.37')
 #%%
 # прибор уже создан
-it.set_gain(2, auto=True, manual_level=1)
-it.set_threshold(2, 2200)
-it.start_freq_stream()
+it.set_gain(1, auto=True, manual_level=1)
+it.set_threshold(1, 2000)
+it.start_freq_stream(2000)
 
 stop_all, stats = record_and_plot(
     it,
-    filepath="simul_dump.pkl",
+    channels=[1],
+    FBGs=[[1,2,3]],
+    write_every_n=10,
+    filepath="fbg_dump.pkl",
     duration_sec=10.0,
-    batch_size=1000,
-    warmup_sec=1.0,
-    drop_during_warmup=True,
-    plot_channel=2,
+    plot_channel=1,
     plot_fbg_indices=[0,1,2],
     window_sec=10.0,
-    max_fps=30
+    max_fps=30    
 )
 #%%
 # ... окно живёт; когда захотите — останавливайте
 stop_all()
-
+it.stop_freq_stream()
 # После закрытия окна или по таймеру — можно остановить:
 # time.sleep(12); stop_all()

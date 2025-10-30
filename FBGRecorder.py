@@ -22,7 +22,7 @@ __date__='27.10.2025'
 
 
 
-from __future__ import annotations
+# from __future__ import annotations
 
 import os
 import struct
@@ -30,7 +30,9 @@ import threading
 import time
 from dataclasses import dataclass, field
 from queue import Queue, Empty, Full
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple,Iterable
+from matplotlib.animation import FuncAnimation
+import gc
 
 # Мягкие зависимости
 try:
@@ -43,7 +45,6 @@ except Exception as e:
 # Конфигурации и статистика
 # ==========================
 
-from typing import Optional
 
 @dataclass
 class RecorderConfig:
@@ -63,6 +64,12 @@ class RecorderConfig:
 
     # Новый параметр: какой канал писать (None — все)
     record_channel: Optional[int] = None
+    # Расширенная фильтрация: список каналов и FBG (0-based). Если None — писать всё.
+    record_channels: Optional[List[int]] = None
+    record_fbg_map: Optional[List[List[int]]] = None
+    
+    # Новый параметр: записывать только каждый n-ый кадр (после прогрева). 1 = писать каждый.
+    write_every_n: int = 1
 
 
 @dataclass
@@ -93,17 +100,44 @@ class RecorderStats:
 # Утилиты
 # ==========================
 
-def make_header(it: Any, channel_map: Optional[List[int]] = None) -> Dict[str, Any]:
-    hdr = {
+def make_header(it: Any,
+                channel_map: Optional[List[int]] = None,
+                fbg_map: Optional[List[List[int]]] = None) -> Dict[str, Any]:
+    """
+    Строит заголовок. Если задан channel_map/fbg_map — пишется с version=5
+    и полями:
+      - original_channels, original_fbg_per_ch
+      - channel_map: List[int] (0-based индексы каналов)
+      - fbg_map: List[List[int]] (0-based индексы решёток по каждому каналу)
+    Если channel_map/fbg_map не заданы — поведение как раньше (version=4).
+    """
+    hdr: Dict[str, Any] = {
         "channels": int(getattr(it, "channels", 0)),
         "fbg_per_ch": int(getattr(it, "fbg_per_ch", 0)),
         "version": 4,
         "format": "(ts_perf, ts_unix, pkt_ctr, wl[n_ch][fbg])",
     }
-    if channel_map is not None:
-        hdr["original_channels"] = int(getattr(it, "channels", 0))
-        hdr["channel_map"] = list(map(int, channel_map))
-        hdr["channels"] = len(channel_map)
+    if channel_map is not None or fbg_map is not None:
+        cm = list(map(int, channel_map or list(range(int(getattr(it, "channels", 0))))))
+        fm = []
+        orig_fbg = int(getattr(it, "fbg_per_ch", 0))
+        if fbg_map is None:
+            # по умолчанию: для каждого выбранного канала — все FBG
+            fm = [list(range(orig_fbg)) for _ in cm]
+        else:
+            fm = [list(map(int, arr)) for arr in fbg_map]
+
+        hdr.update({
+            "version": 5,
+            "original_channels": int(getattr(it, "channels", 0)),
+            "original_fbg_per_ch": orig_fbg,
+            "channel_map": cm,
+            "fbg_map": fm,
+            "channels": len(cm),
+            # fbg_per_ch оставляем как «исходное» — для обратной совместимости
+            "fbg_per_ch": orig_fbg,
+            "format": "(ts_perf, ts_unix, pkt_ctr, wl[n_selected_ch][n_selected_fbg_per_ch])",
+        })
     return hdr
 
 def _write_block(fh, batch: List[Tuple[float, float, int, List[List[float]]]]) -> int:
@@ -229,33 +263,53 @@ class FBGRecorder:
     
                 wl = fr.get("wavelength_nm")
                 if wl is None or not isinstance(wl, (list, tuple)) or len(wl) == 0:
-                    # пустой или неожиданный формат — пропустим
                     continue
-    
-                # Фильтр по каналу (если включён)
-                if self.cfg.record_channel is not None:
-                    ch = int(self.cfg.record_channel)
-                    if not (0 <= ch < len(wl)):
-                        # устройство дало меньше каналов — пропустим кадр
-                        continue
-                    wl = [wl[ch]]
-    
-                # Привести WL к списку списков float
-                compact = []
-                for row in wl:
+
+                # Приведём строки к list[float]
+                def _row_to_list(row):
                     if not isinstance(row, (list, tuple)):
-                        # иногда может прийти np.ndarray — приведём
                         try:
                             row = list(row)
                         except Exception:
                             row = []
-                    compact.append([float(x) for x in row])
-    
+                    return [float(x) for x in row]
+
+                # Применим фильтрацию
+                wl_filtered: List[List[float]]
+                if self.cfg.record_channels is not None or self.cfg.record_channel is not None:
+                    # приоритет у record_channels; record_channel — обратная совместимость
+                    if self.cfg.record_channels is not None:
+                        ch_map = [int(x) for x in self.cfg.record_channels]
+                    else:
+                        ch_map = [int(self.cfg.record_channel)]  # type: ignore[arg-type]
+
+                    # Проверим границы
+                    wl_filtered = []
+                    for idx, ch in enumerate(ch_map):
+                        if 0 <= ch < len(wl):
+                            row_full = _row_to_list(wl[ch])
+                        else:
+                            row_full = []
+
+                        if self.cfg.record_fbg_map is not None:
+                            fbg_map_for_ch = self.cfg.record_fbg_map[idx] if idx < len(self.cfg.record_fbg_map) else []
+                            row_sel = []
+                            for fbg in fbg_map_for_ch:
+                                if 0 <= fbg < len(row_full):
+                                    row_sel.append(row_full[fbg])
+                                else:
+                                    row_sel.append(float("nan"))
+                            wl_filtered.append(row_sel)
+                        else:
+                            wl_filtered.append(row_full)
+                else:
+                    # без фильтрации — все каналы/все FBG
+                    wl_filtered = [_row_to_list(r) for r in wl]
+
                 ts_perf = float(fr.get("t_perf", time.perf_counter()))
                 ts_unix = float(fr.get("timestamp", time.time()))
                 pkt_ctr = int(fr.get("pkt_counter_be32", -1))
-    
-                rec = (ts_perf, ts_unix, pkt_ctr, compact)
+                rec = (ts_perf, ts_unix, pkt_ctr, wl_filtered)               
     
                 try:
                     self._q.put_nowait(rec)
@@ -305,6 +359,8 @@ class FBGRecorder:
 
         writing_active = False
         warmup_deadline = t_start + max(0.0, self.cfg.warmup_sec)
+        write_every_n = max(1, int(getattr(self.cfg, "write_every_n", 1)))
+        taken_ctr = 0  # считанные (и прошедшие warmup) кадры, для отбора каждого n-ого
 
         def warmup_done(now: float) -> bool:
             if now >= warmup_deadline:
@@ -315,10 +371,19 @@ class FBGRecorder:
 
         try:
             with open(self.cfg.filepath, "wb") as f:
+                # channel_map/fbg_map для заголовка (0-based)
                 ch_map = None
-                if self.cfg.record_channel is not None:
+                fbg_map = None
+                if self.cfg.record_channels is not None:
+                    ch_map = [int(x) for x in self.cfg.record_channels]
+                    fbg_map = None
+                    if self.cfg.record_fbg_map is not None:
+                        # убедимся, что длины соотносятся
+                        fbg_map = [list(map(int, arr)) for arr in self.cfg.record_fbg_map]
+                elif self.cfg.record_channel is not None:
                     ch_map = [int(self.cfg.record_channel)]
-                header = make_header(self.it, channel_map=ch_map)
+
+                header = make_header(self.it, channel_map=ch_map, fbg_map=fbg_map)
                 pickle.dump(header, f, protocol=pickle.HIGHEST_PROTOCOL)
          
 
@@ -355,7 +420,14 @@ class FBGRecorder:
                         # В прогреве просто выкидываем кадры, чтобы не копить задержку
                         continue
 
-                    # Активная запись
+
+                    # Если уже не прогрев — считаем только эти кадры
+                    if writing_active:
+                        taken_ctr += 1
+                        if (taken_ctr % write_every_n) != 0:
+                            # пропускаем этот кадр
+                            continue                    
+
                     batch.append(rec)
                     self._stats.wr_frames += 1
                     wr_count_since += 1
@@ -388,26 +460,51 @@ class FBGRecorder:
 def record_to_file(it: Any,
                    filepath: str,
                    duration_sec: float,
-                   batch_size: int = 1000,
-                   queue_max: int = 50000,
-                   fsync_every_batches: int = 20,
-                   idle_sleep_empty_ring: float = 0.0002,
-                   start_delay_sec: float = 0.5,
-                   warmup_sec: float = 1.5,
-                   drop_during_warmup: bool = True,
-                   min_rate_hz: float = 1500.0,
-                   rate_window_sec: float = 0.8,
-                   disable_gc_during_record: bool = True,
-                   record_channel: Optional[int] = None  # <-- новый аргумент
+                   channels: Optional[List[int]] = None,        # 1-based
+                   FBGs: Optional[List[List[int]]] = None ,# 1-based
+                   write_every_n: int = 1   
                    ) -> Dict[str, Any]:
-  
     """
-    Удобная обёртка: старт записи, ожидание завершения, остановка. Возвращает финальную статистику.
+    Если заданы channels/FBGs — записывается только это подмножество.
+    channels — список каналов (1-based). FBGs — список списков FBG (1-based) на каждый канал.
+    Если channels задан, а FBGs — нет: будут записаны все FBG выбранных каналов.
     """
-    # Закроем GUI и вычистим мусор перед записью
+    
+    batch_size=1000
+    queue_max= 50000
+    fsync_every_batches= 20
+    idle_sleep_empty_ring= 0.0002
+    start_delay_sec= 0.5
+    warmup_sec= 1.5
+    drop_during_warmup= True
+    min_rate_hz= 1500.0
+    rate_window_sec= 0.8
+    disable_gc_during_record=True
+    
+    
+    
     configure_headless_matplotlib()
     import gc as _gc
     _gc.collect()
+
+    # Проверка и преобразование индексов в 0-based
+    rec_channels_zb: Optional[List[int]] = None
+    rec_fbg_map_zb: Optional[List[List[int]]] = None
+
+    if channels is not None:
+        if not isinstance(channels, (list, tuple)) or len(channels) == 0:
+            raise ValueError("channels должен быть непустым списком (1-based)")
+        rec_channels_zb = [int(ch) - 1 for ch in channels]
+        if FBGs is not None:
+            if len(FBGs) != len(rec_channels_zb):
+                raise ValueError("Длина FBGs должна совпадать с длиной channels")
+            rec_fbg_map_zb = []
+            for lst in FBGs:
+                if not isinstance(lst, (list, tuple)) or len(lst) == 0:
+                    raise ValueError("Каждый элемент FBGs должен быть непустым списком (1-based)")
+                rec_fbg_map_zb.append([int(i) - 1 for i in lst])
+        else:
+            rec_fbg_map_zb = None
 
     cfg = RecorderConfig(
         filepath=filepath,
@@ -422,36 +519,52 @@ def record_to_file(it: Any,
         min_rate_hz=min_rate_hz,
         rate_window_sec=rate_window_sec,
         disable_gc_during_record=disable_gc_during_record,
-        record_channel=record_channel,  # <-- сюда
+        # обратная совместимость: если задан один канал и не задан список — используем старое поле
+        record_channels=rec_channels_zb,
+        record_fbg_map=rec_fbg_map_zb,
+        write_every_n=int(write_every_n)
     )
 
     rec = FBGRecorder(it, cfg)
     rec.start()
     rec.wait_done(timeout=duration_sec + 10.0)
     rec.stop()
-
     return rec.stats()
-
 
 # ==========================
 # Чтение записанного файла
 # ==========================
 def read_fbg_stream_raw_lp(filepath: str):
+    """
+    Возвращает:
+      - times: np.ndarray [n_samples], секунд от первого кадра
+      - channel_FBGs: List[np.ndarray], длиной n_selected_ch;
+        каждый элемент — np.ndarray формы [n_selected_fbg(ch), n_samples].
+
+    Поддерживает файлы:
+      - version 4: равное кол-во FBG на канал (header["fbg_per_ch"])
+      - version 5: выбор каналов/FBG (header["channel_map"], header["fbg_map"])
+    """
     import numpy as np
     with open(filepath, "rb") as f:
         header = pickle.load(f)
+        version = int(header.get("version", 4))
 
-        # Поддержка channel_map (если писали только часть каналов)
-        channel_map = header.get("channel_map", None)
-        if channel_map is not None:
-            n_ch = int(header.get("channels", len(channel_map)))
+        if version >= 5 and ("channel_map" in header) and ("fbg_map" in header):
+            channel_map = list(map(int, header["channel_map"]))
+            fbg_map = [list(map(int, row)) for row in header["fbg_map"]]
+            n_ch = len(channel_map)
+            fbg_counts = [len(row) for row in fbg_map]
         else:
+            channel_map = None
+            fbg_map = None
             n_ch = int(header["channels"])
-
-        fbg_per_ch = int(header["fbg_per_ch"])
+            fbg_per_ch = int(header["fbg_per_ch"])
+            fbg_counts = [fbg_per_ch] * n_ch
 
         t_perf: List[float] = []
-        acc: List[List[List[float]]] = [[[] for _ in range(fbg_per_ch)] for _ in range(n_ch)]
+        # acc[ch][i] -> list[float]
+        acc: List[List[List[float]]] = [[[] for _ in range(fbg_counts[ch])] for ch in range(n_ch)]
 
         while True:
             len_buf = f.read(4)
@@ -475,27 +588,33 @@ def read_fbg_stream_raw_lp(filepath: str):
                 ts_p, ts_u, pkt_ctr, wl = rec
                 t_perf.append(float(ts_p))
 
-                # wl должен быть длиной n_ch (в т.ч. 1 при записи одного канала)
+                # wl должен быть длиной n_ch
+                if not isinstance(wl, (list, tuple)):
+                    wl = []
                 if len(wl) != n_ch:
-                    wl = (wl + [[]] * n_ch)[:n_ch]
+                    wl = (list(wl) + [[]] * n_ch)[:n_ch]
 
                 for ch in range(n_ch):
                     row = wl[ch]
-                    if len(row) < fbg_per_ch:
-                        row = row + [float("nan")] * (fbg_per_ch - len(row))
-                    elif len(row) > fbg_per_ch:
-                        row = row[:fbg_per_ch]
-                    for i in range(fbg_per_ch):
-                        acc[ch][i].append(float(row[i]))
+                    # нормализуем до нужного количества FBG для этого канала
+                    need = fbg_counts[ch]
+                    cur = []
+                    if isinstance(row, (list, tuple)):
+                        cur = [float(x) for x in row[:need]]
+                    # добить NaN при нехватке
+                    if len(cur) < need:
+                        cur = cur + [float("nan")] * (need - len(cur))
+                    for i in range(need):
+                        acc[ch][i].append(cur[i])
 
+    
     t_perf_arr = np.asarray(t_perf, dtype=float)
     if t_perf_arr.size == 0:
         return t_perf_arr, []
-
     t0 = t_perf_arr[0]
     times = t_perf_arr - t0
-    channels = [np.asarray(acc[ch], dtype=float) for ch in range(n_ch)]
-    return times, channels
+    channel_FBGs = [np.asarray(acc[ch], dtype=float) for ch in range(len(acc))]
+    return times, channel_FBGs
 
 class FrameFanout:
     """
@@ -555,18 +674,18 @@ class FrameFanout:
 # ==========================
 # Live‑plot в реальном времени
 # ==========================
+
+
 def record_and_plot(it: Any,
                     filepath: str,
                     duration_sec: float,
-                    # запись
-                    batch_size: int = 1000,
-                    fsync_every_batches: int = 20,
-                    warmup_sec: float = 1.0,
-                    drop_during_warmup: bool = True,
-                    start_delay_sec: float = 0.3,
-                    disable_gc_during_record: bool = True,
+                    # НОВОЕ: выборка для записи (1-based)
+                    channels: Optional[List[int]] = None,
+                    FBGs: Optional[List[List[int]]] = None,
+                    # НОВОЕ: писать каждый n-ый кадр
+                    write_every_n: int = 1,
                     # live-плот
-                    plot_channel: int = 0,
+                    plot_channel: int = 1,  # ВНИМАНИЕ: для пользователя 1-based (как в docstring live_plot)
                     plot_fbg_indices: List[int] = (0, 1, 2),
                     window_sec: float = 10.0,
                     max_fps: int = 30,
@@ -582,9 +701,26 @@ def record_and_plot(it: Any,
     from queue import Queue, Empty
     import time
 
-    # Небольшая задержка для старта потока устройства
-    if start_delay_sec > 0:
-        time.sleep(start_delay_sec)
+    FSYNC_EVERY_BATCHES = 20
+    BATCH_SIZE = 1000
+    WARMUP_SEC = 1.0
+    DROP_DURING_WARMUP = True
+    START_DELAY_SEC = 0.3
+    DISABLE_GC_DURING_RECORD = True
+    
+    # Подготовим карты выбора (1-based -> 0-based)
+    ch_map_0 = None
+    fbg_map_0 = None
+    if channels is not None:
+        ch_map_0 = [int(c) - 1 for c in channels]
+        if FBGs is not None:
+            if len(FBGs) != len(ch_map_0):
+                raise ValueError("Длина FBGs должна совпадать с длиной channels")
+            fbg_map_0 = [[int(i) - 1 for i in arr] for arr in FBGs]
+
+    # Небольшая задержка для старта потока устройства (внутренняя, фиксированная)
+    if START_DELAY_SEC > 0:
+        time.sleep(START_DELAY_SEC)
 
     # Очереди для писателя и для графика
     q_rec: "Queue[Tuple[float, List[List[float]]]]" = Queue(maxsize=50000)
@@ -604,10 +740,10 @@ def record_and_plot(it: Any,
         "blocks_written": 0,
     }
 
-    # Писатель батчами (берёт кадры из q_rec)
     stop_event = threading.Event()
 
     def writer_thread():
+        nonlocal stats
         t_start = stats["started_at"]
         t_end = t_start + float(duration_sec)
         blocks_written = 0
@@ -615,26 +751,33 @@ def record_and_plot(it: Any,
         last_wr = time.perf_counter()
 
         gc_was_enabled = gc.isenabled()
-        if disable_gc_during_record and gc_was_enabled:
+        if DISABLE_GC_DURING_RECORD and gc_was_enabled:
             gc.disable()
+
+        # частота отбора: каждый n‑ый
+        write_every = max(1, int(write_every_n))
+        taken_ctr = 0
 
         try:
             with open(filepath, "wb") as f:
-                header = make_header(it)
+                # Заголовок: добавляем карты, если заданы
+                header = make_header(it, channel_map=ch_map_0, fbg_map=fbg_map_0)
                 pickle.dump(header, f, protocol=pickle.HIGHEST_PROTOCOL)
 
                 batch: List[Tuple[float, float, int, List[List[float]]]] = []
                 writing_active = False
-                warmup_deadline = t_start + max(0.0, warmup_sec)
+                warmup_deadline = t_start + max(0.0, WARMUP_SEC)
 
                 def flush_batch():
                     nonlocal blocks_written, batch
+                    if not batch:
+                        return
                     wrote = _write_block(f, batch)
                     if wrote:
                         blocks_written += 1
                         stats["blocks_written"] = blocks_written
                         batch.clear()
-                        if fsync_every_batches and (blocks_written % fsync_every_batches == 0):
+                        if FSYNC_EVERY_BATCHES and (blocks_written % FSYNC_EVERY_BATCHES == 0):
                             f.flush()
                             os.fsync(f.fileno())
 
@@ -647,26 +790,45 @@ def record_and_plot(it: Any,
                         writing_active = True
 
                     try:
-                        t_perf, wl = q_rec.get(timeout=min(0.1, max(0.0, t_end - now)))
+                        t_perf, wl_full = q_rec.get(timeout=min(0.1, max(0.0, t_end - now)))
                     except Empty:
                         if writing_active:
                             flush_batch()
                         continue
 
-                    # surrogate поля (если нужно — можно прокинуть реальные через fanout)
+                    if not writing_active and DROP_DURING_WARMUP:
+                        continue
+
+                    # Отбор каждого n-го
+                    taken_ctr += 1
+                    if (taken_ctr % write_every) != 0:
+                        continue
+
+                    # Фильтрация каналов/FBG для записи
+                    if ch_map_0 is None:
+                        wl_rows = [[float(x) for x in row] for row in wl_full]
+                    else:
+                        wl_rows = []
+                        for idx, ch in enumerate(ch_map_0):
+                            if 0 <= ch < len(wl_full):
+                                src = wl_full[ch]
+                                if fbg_map_0 is not None and idx < len(fbg_map_0):
+                                    sel = fbg_map_0[idx]
+                                    wl_rows.append([float(src[i]) if 0 <= i < len(src) else float("nan") for i in sel])
+                                else:
+                                    wl_rows.append([float(x) for x in src])
+                            else:
+                                wl_rows.append([])
+
                     ts_unix = time.time()
                     pkt_ctr = -1
-                    compact = [[float(x) for x in row] for row in wl]
-                    rec = (float(t_perf), float(ts_unix), int(pkt_ctr), compact)
-
-                    if not writing_active and drop_during_warmup:
-                        continue
+                    rec = (float(t_perf), float(ts_unix), int(pkt_ctr), wl_rows)
 
                     batch.append(rec)
                     stats["wr_frames"] += 1
                     wr_count_since += 1
 
-                    if writing_active and (len(batch) >= batch_size):
+                    if writing_active and (len(batch) >= BATCH_SIZE):
                         flush_batch()
 
                     if (now - last_wr) >= 0.5:
@@ -680,13 +842,13 @@ def record_and_plot(it: Any,
                 f.flush()
                 os.fsync(f.fileno())
         finally:
-            if disable_gc_during_record and gc_was_enabled and not gc.isenabled():
+            if DISABLE_GC_DURING_RECORD and gc_was_enabled and not gc.isenabled():
                 gc.enable()
 
     wr_thr = threading.Thread(target=writer_thread, name="FBG-Writer", daemon=True)
     wr_thr.start()
 
-    # Live-плот читает из q_plot
+    # Live‑плот — без изменений производительности; канал в live_plot — 1-based (как и было)
     stop_plot = live_plot_wavelengths(
         it=it,
         channel=plot_channel,
@@ -700,18 +862,15 @@ def record_and_plot(it: Any,
     )
 
     def stop_all():
-        # Закрыть окно графика
         try:
             stop_plot()
         except Exception:
             pass
-        # Остановить writer
         stop_event.set()
         try:
             wr_thr.join(timeout=2.0)
         except Exception:
             pass
-        # Остановить fanout
         try:
             fan.stop(timeout=1.0)
         except Exception:
@@ -730,6 +889,7 @@ def live_plot_wavelengths(it,
                           blocking: bool = False,
                           source_queue: "Queue[Tuple[float, List[List[float]]]]" = None):
     """
+    нумерация канала - с первого
     Реального времени график длин волн выбранных решёток одного канала.
 
     Если source_queue передан — функция НЕ создаёт свой RX-поток, а читает кадры из внешней очереди.
@@ -744,16 +904,16 @@ def live_plot_wavelengths(it,
     import time
     from collections import deque
 
-    import numpy as np
     import matplotlib.pyplot as plt
-    from matplotlib.animation import FuncAnimation
+
 
     # Валидация индексов
+    
     n_ch = int(getattr(it, "channels", 0) or 0)
     fbg_per_ch = int(getattr(it, "fbg_per_ch", 0) or 0)
-    if n_ch > 0 and not (0 <= channel < n_ch):
-        raise ValueError(f"Некорректный channel={channel}, допустимо 0..{n_ch-1}")
-
+    if n_ch > 0 and not (1 <= channel < n_ch+1):
+        raise ValueError(f"Некорректный channel={channel}, допустимо 1..{n_ch}")
+    channel=channel-1 # весь дальнейшей код в этой функции работает с нумерацией каналов 0..n-1
     fbg_indices = list(fbg_indices)
     if fbg_per_ch > 0:
         for i in fbg_indices:
@@ -803,7 +963,7 @@ def live_plot_wavelengths(it,
     else:
         rx_thread = None
 
-    import matplotlib.pyplot as plt
+
     plt.ion()
     fig, ax = plt.subplots(figsize=(8, 4))
     title = title or f"Channel {channel} — FBG {fbg_indices}"
@@ -873,7 +1033,7 @@ def live_plot_wavelengths(it,
 
         return list(lines.values())
 
-    from matplotlib.animation import FuncAnimation
+
     interval_ms = max(1, int(1000 / max_fps))
     ani = FuncAnimation(fig, update, interval=interval_ms, blit=False,
                         cache_frame_data=False, save_count=1000)

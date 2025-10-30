@@ -7,8 +7,8 @@ Created on Fri Oct 17 14:19:23 2025
 
 For the AFR Arcadia Optronix Interrogator
 """
-__version__='1.0'
-__date__='27.10.2025'
+__version__='1.1'
+__date__='30.10.2025'
 
 
 import socket
@@ -25,7 +25,7 @@ import math
 @dataclass
 class InterrogatorUDPConfig:
     # IP/порт модуля и локальная привязка ПК
-    module_ip: str = "192.168.0.19"
+    
     module_port: int = 4567
     pc_bind_ip: str = "0.0.0.0"
     pc_bind_port: int = 8001
@@ -64,7 +64,9 @@ class Interrogator:
     FC_DEBUG = 0x03
     FC_READ_ADC_SINGLE = 0x07
 
-    def __init__(self, cfg: InterrogatorUDPConfig = InterrogatorUDPConfig()):
+    def __init__(self, ip="192.168.0.19",
+                 cfg: InterrogatorUDPConfig = InterrogatorUDPConfig()):
+        self.module_ip=ip
         self.cfg = cfg
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         # Просим у ОС большой буфер приёма, чтобы не терять пакеты при пиковой нагрузке
@@ -92,7 +94,6 @@ class Interrogator:
         self.fbg_per_ch: int = 30        # число слотов FBG на канал (читается из read_module_params)
         self.peak_interval_ghz: int = 40 # интервал между пиками (ГГц), влияет на детекцию
         # Код скорости свипа (сырые 2 байта из мануала), по умолчанию 2 kHz
-        self.sweep_speed_hex: Tuple[int, int] = (0x00, 0x66)
         self.module_params_known = False
 
         # Параметры свипа для справки/парсера (заполняются read_sweep_config/set_sweep)
@@ -103,7 +104,7 @@ class Interrogator:
         self.sweep_direction_decreasing: Optional[bool] = None  # True, если свип идёт в сторону убывания частоты
         
         # При инициализации отправим STOP, чтобы модуль прекратил поток, если он был включён ранее
-        self.stop()
+        self.stop_freq_stream()
 
     # ------------------- Утилиты конвертации -------------------
 
@@ -147,7 +148,7 @@ class Interrogator:
 
     def _send(self, payload: bytes):
         # «сырой» UDP sendto
-        self._sock.sendto(payload, (self.cfg.module_ip, self.cfg.module_port))
+        self._sock.sendto(payload, (self.module_ip, self.cfg.module_port))
 
     def _recv_datagram(self, timeout: Optional[float] = None) -> Optional[bytes]:
         # Блокирующий приём одного UDP датаграммы с таймаутом
@@ -327,8 +328,10 @@ class Interrogator:
         return ok
 
     def set_threshold(self, channel: int, threshold: int, timeout: float = 1.0) -> bool:
+        # нумерация канала с первого
         # Команда: 0x20 0x02 0x06  Ch(0-based)  ThrHi ThrLo
         # Порог 0..65535, 65535 обычно трактуется как «auto»
+        
         if channel < 1 or channel > 16:
             raise ValueError("Channel must be 1..16")
         if not (0 <= threshold <= 65535):
@@ -376,16 +379,16 @@ class Interrogator:
         # Команда без ответа: 0x20 0x06 0x04 0x00 — сохранение порогов во FLASH/EEPROM
         self._send(bytes([self.ID_CONFIG, self.FC_SAVE_THRESHOLD, 0x04, 0x00]))
 
-    def stop(self, timeout: float = 1.0) -> bool:
+    def stop_freq_stream(self, timeout: float = 1.0) -> bool:
         # 0x30 0x01 0x06 0x00 0x00 0x00 — остановка рабочего потока
         self._send(bytes([self.ID_WORK, self.FC_STOP, 0x06, 0x00, 0x00, 0x00]))
         data = self._recv_datagram(timeout)
         return self._is_success_reply(data, self.ID_WORK, self.FC_STOP)
 
-    def start_freq_stream(self, sweep_speed_code: Tuple[int, int] = (0x00, 0xCA)):
+    def start_freq_stream(self, acq_rate=2000):
         # Команда запуска потока частот: 0x30 0x02 0x06  X1 X2 0x00
         # После неё модуль начинает циклически слать пакеты 0x30 0x02.
-        self.sweep_speed_hex = sweep_speed_code
+        sweep_speed_code=self.sweep_speed_code(acq_rate)
         payload = bytes([self.ID_WORK, self.FC_READ_FREQ, 0x06, sweep_speed_code[0], sweep_speed_code[1], 0x00])
         self._send(payload)
         # Запустить приёмный поток, если ещё не работает
@@ -711,18 +714,17 @@ class Interrogator:
     def sweep_speed_code(hz: int) -> Tuple[int, int]:
         # Таблица соответствия требуемой скорости свипа → код (из мануала, табл. 2.1.3/2.3.2)
         mapping = {
-            1: (0x00, 0x00),
-            3: (0x00, 0x0A),
-            100: (0x00, 0x1E),
-            200: (0x00, 0x65),
-            500: (0x00, 0xC9),
-            1000: (0x01, 0xF5),
-            2000: (0x00, 0x66),
-            4000: (0x00, 0xCA),
-            8000: (0x01, 0x92),
+            1: (0x00, 0x0A),
+            3: (0x00, 0x0E),
+            100: (0x00, 0x65),
+            200: (0x00, 0xC9),
+            500: (0x01, 0xF5),
+            1000: (0x00, 0x66),
+            2000: (0x00, 0xCA),
+            4000: (0x01, 0x92)
         }
         if hz not in mapping:
-            raise ValueError("Unsupported sweep speed")
+            raise ValueError(f"Unsupported sweep speed. Supported speeds are {mapping.keys()} Hz")
         return mapping[hz]
     
     '''
@@ -734,7 +736,7 @@ class Interrogator:
 # ------------------- Пример использования -------------------
 
 if __name__ == "__main__":
-    it = Interrogator()
+    it = Interrogator('10.2.60.37')
 #%%
     # Прочитать идентификацию и параметры
     ver = it.read_version()
@@ -754,11 +756,11 @@ if __name__ == "__main__":
     # Порог/усиление: показываем настройку канала 2 и «глушим» прочие завышенным порогом
     # Внимание: для ручного усиления MSB=1 (0x80xx), для авто — MSB=0 (0x00xx).
     # Уровень (LL) в авто-режиме прошивкой игнорируется.
-    ch=2
+    ch=1
     it.set_threshold(ch, 2000)
-    it.set_gain(ch, auto=False, manual_level=0)
+    it.set_gain(ch, auto=True, manual_level=0)
     # Рекомендуется отключить ненужные каналы завышенным порогом:
-    for ch in (1,3,4): it.set_threshold(ch, 60000)
+    # for ch in (1,3,4): it.set_threshold(ch, 60000)
 
     # Запуск потока частот, чтение одного кадра и быстрый доступ к данным
     it.start_freq_stream()

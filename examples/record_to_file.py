@@ -11,12 +11,12 @@ import time
 import numpy as np
 
 
-it = Interrogator()
+it = Interrogator('10.2.60.37')
 #%%
   # Сбор данных 5 секунд
-ch=2
-it.set_gain(ch, auto=True, manual_level=1)
-it.set_threshold(ch, 2200)
+ch=1
+it.set_gain(ch, auto=False, manual_level=1)
+it.set_threshold(ch, 3000)
 time.sleep(0.1)
 it.start_freq_stream()
 
@@ -27,7 +27,7 @@ it.start_freq_stream()
 # it.start_freq_stream()
 
 # 2) записать 10 секунд в файл
-stats = record_to_file(it, "fbg_dump.pkl", duration_sec=10.0,record_channel=1)
+stats = record_to_file(it, "fbg_dump.pkl", duration_sec=10.0,channels=[1],FBGs=[[1,2,3]],write_every_n=10)
 print("Запись завершена:", stats)
-it.stop()
+it.stop_freq_stream()
 
