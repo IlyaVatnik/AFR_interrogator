@@ -27,7 +27,6 @@ class InterrogatorUDPConfig:
     # IP/порт модуля и локальная привязка ПК
     
     module_port: int = 4567
-    pc_bind_ip: str = "10.2.60.33"
     pc_bind_port: int = 8001
 
     # Размер сокетного буфера приёма (просим у ОС), ёмкость кольца и таймаут recv
@@ -64,7 +63,8 @@ class Interrogator:
     FC_DEBUG = 0x03
     FC_READ_ADC_SINGLE = 0x07
 
-    def __init__(self, ip="192.168.0.19",
+    def __init__(self, ip,
+                 pc_ip,
                  cfg: InterrogatorUDPConfig = InterrogatorUDPConfig()):
         self.module_ip=ip
         self.cfg = cfg
@@ -74,7 +74,7 @@ class Interrogator:
             self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, cfg.recv_buf_size)
         except Exception:
             pass
-        self._sock.bind((cfg.pc_bind_ip, cfg.pc_bind_port))
+        self._sock.bind((pc_ip, cfg.pc_bind_port))
         self._sock.settimeout(cfg.recv_timeout)
 
         # Поток и флаг остановки для приёма рабочего потока 0x30 0x02

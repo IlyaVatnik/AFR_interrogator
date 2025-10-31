@@ -16,7 +16,7 @@ it = Interrogator('10.2.60.37')
 #%%
 # прибор уже создан
 it.set_gain(1, auto=False, manual_level=1)
-it.set_threshold(1, 2000)
+it.set_threshold(1, 3000)
 it.start_freq_stream()
 
 stop_all, stats = record_and_plot(
