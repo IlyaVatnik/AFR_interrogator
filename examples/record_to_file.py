@@ -18,7 +18,7 @@ ch=1
 it.set_gain(ch, auto=False, manual_level=1)
 it.set_threshold(ch, 3000)
 time.sleep(0.1)
-it.start_freq_stream()
+it.start_freq_stream(2000)
 
 # from afr_recorder import record_to_file, read_fbg_stream_raw_lp, safe_stop_interrogator
 

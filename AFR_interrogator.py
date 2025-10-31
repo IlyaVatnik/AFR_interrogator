@@ -27,7 +27,7 @@ class InterrogatorUDPConfig:
     # IP/порт модуля и локальная привязка ПК
     
     module_port: int = 4567
-    pc_bind_ip: str = "0.0.0.0"
+    pc_bind_ip: str = "10.2.60.33"
     pc_bind_port: int = 8001
 
     # Размер сокетного буфера приёма (просим у ОС), ёмкость кольца и таймаут recv

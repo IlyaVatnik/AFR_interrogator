@@ -208,4 +208,4 @@ if __name__ == "__main__":
 
 #%%
 
-    it.set_settings(src_ip='10.2.60.34')
+    it.set_settings(src_ip='10.2.60.37',dst_ip='10.2.60.33')
