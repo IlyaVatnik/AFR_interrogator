@@ -3,12 +3,12 @@
 
 Created on Fri Oct 17 14:19:23 2025
 
-@author: ChatGPT5 @ Ilya
+@authors: ChatGPT5 @ Ilya
 
 For the AFR Arcadia Optronix Interrogator
 """
-__version__='1.1'
-__date__='30.10.2025'
+__version__='1.2'
+__date__='11.11.2025'
 
 
 import socket
@@ -30,15 +30,14 @@ class InterrogatorUDPConfig:
     pc_bind_port: int = 8001
 
     # Размер сокетного буфера приёма (просим у ОС), ёмкость кольца и таймаут recv
-    recv_buf_size: int = 4 * 1024 * 1024
-    ring_size: int = 20000
+    recv_buf_size: int = 16 * 1024 * 1024
+    ring_size: int = 2000
     recv_timeout: float = 0.2  # seconds
 
 
 class Interrogator:
     # Группа ID (наверх протокола делит пакеты на запросы/конфиг/рабочие)
-    BASE_FREQ_GHZ = 191000   # базовая частота (зарезервировано; сейчас не используется)
-    SCALE_GHZ_PER_COUNT = 1  # масштаб «тик->ГГц» (зарезервировано; сейчас не используется)
+
 
     ID_QUERY = 0x10   # запросы (чтение статических/конфигурационных параметров)
     ID_CONFIG = 0x20  # команды конфигурации (установка настроек)
@@ -426,7 +425,7 @@ class Interrogator:
            
         
 
-    def debug_once(self, timeout: float = 1.0) -> Tuple[dict, dict]:
+    def get_raw_measurement(self, timeout: float = 1.0) -> Tuple[dict, dict]:
         # Вызов DEBUG (разовый). Текущая реализация-заглушка: реальный парсер требует уточнения формата.
         self._send(bytes([self.ID_WORK, self.FC_DEBUG, 0x06, 0x00, 0x00, 0x00]))
         freq_pkt = self._wait_for_packet(self.ID_WORK, self.FC_READ_FREQ, timeout)
@@ -437,7 +436,7 @@ class Interrogator:
         adc = 0
         return freq, adc
 
-    def read_single_channel_adc(self, channel: int, timeout: float = 1.0) -> dict:
+    def get_single_channel_spectrum(self, channel: int, timeout: float = 1.0) -> dict:
         # Разовый запрос ADC по одному каналу (2.3.4).
         # TODO: распарсить содержимое пакета согласно мануалу
         if channel < 1 or channel > 16:
@@ -447,7 +446,12 @@ class Interrogator:
         pkt = self._wait_for_packet(self.ID_WORK, self.FC_READ_ADC_SINGLE, timeout)
         if not pkt:
             raise TimeoutError("No ADC single packet")
-        return self._parse_adc_single(pkt)
+        ch_no, gain,spectrum=self._parse_adc_single(pkt)
+        
+        return  spectrum
+    
+    def get_waves(self):
+        return 299_792_458.0/np.arange(self.sweep_stop_ghz, self.sweep_start_ghz+self.ad_step_ghz,self.ad_step_ghz)
 
     # ------------------- Внутренние: приём/парсинг -------------------
     
@@ -496,16 +500,109 @@ class Interrogator:
                 last_log = now
 
 
+
     def _wait_for_packet(self, id_byte: int, fc_byte: int, timeout: float) -> Optional[bytes]:
-        # Ожидание одного пакета заданного ID/FC с таймаутом
-        t0 = time.time()
-        while time.time() - t0 < timeout:
-            data = self._recv_datagram(timeout=max(0.0, timeout - (time.time() - t0)))
-            if not data:
-                continue
-            if data[0] == id_byte and data[1] == fc_byte:
-                return data
-        return None
+        """
+        Ждёт и собирает многочастный ответ:
+        - Первая дейтаграмма: содержит заголовок протокола (header_len байт) + начало payload.
+        - Последующие дейтаграммы: содержат только продолжение payload (без заголовка).
+        Возвращает: склеенный кадр (один заголовок + полный payload) либо None по таймауту.
+        """
+        header_len = 6  # длина заголовка вашего протокола (ID, FC, len, ...)
+    
+        t_end = time.monotonic() + timeout
+    
+        # Шаг 1: дождаться первой дейтаграммы с нужными ID/FC
+        first = None
+        while time.monotonic() < t_end:
+            dt = max(0.0, t_end - time.monotonic())
+            d = self._recv_datagram(timeout=dt)
+            if not d:
+                return None
+            if len(d) >= 2 and d[0] == id_byte and d[1] == fc_byte:
+                first = d
+                break
+        if first is None:
+            return None
+        if len(first) < header_len:
+            # Невалидный стартовый пакет
+            return None
+    
+        # Шаг 2: определить ожидаемую полную длину кадра
+        # Пытаемся прочитать поле длины из заголовка (обычно little-endian в bytes[2:4]).
+        expected_total_len = None
+        try:
+            total_len_field = int.from_bytes(first[2:4], 'little', signed=False)
+            # Если поле — длина полезной нагрузки, то полный кадр = header + payload_len
+            if total_len_field > 0:
+                expected_total_len = header_len + total_len_field
+        except Exception:
+            pass
+    
+        # Фолбэк: для одиночного спектра знаем заранее размер полезной части
+        if expected_total_len is None and fc_byte == self.FC_READ_ADC_SINGLE:
+            # 2 байта канал + 2 байта усиление + 2551 точка по 2 байта = 5106 байт payload
+            expected_total_len = header_len + (2 + 2 + 2551 * 2)
+    
+        # Если так и не удалось — будем просто собирать, пока не исчерпаем таймаут
+        # Но лучше всегда иметь ожидаемую длину.
+        buf = bytearray()
+        buf += first  # первая дейтаграмма целиком (с заголовком)
+    
+
+    
+        # Шаг 3: дочитываем хвосты (чистый payload без заголовка)
+        # Немного продлим окно ожидания «хвостов», чтобы не обрубать слишком рано.
+        t_end = max(t_end, time.monotonic() + 0.001)
+        inter_packet_grace = 0.001  # перезапас между частями
+        last_part_time = time.monotonic()
+    
+        while time.monotonic() < t_end:
+            # Если знаем длину — выходим, как только набрали её
+            if expected_total_len is not None and len(buf) >= expected_total_len:
+                break
+    
+            dt = max(0.0, t_end - time.monotonic())
+            d = self._recv_datagram(timeout=dt)
+            if not d:
+                # небольшой грейс, чтобы дождаться возможно потерявшейся части
+                if time.monotonic() - last_part_time > inter_packet_grace:
+                    break
+                else:
+                    continue
+    
+            # ВАЖНО: последующие дейтаграммы — это продолжение payload без заголовка.
+            buf += d
+            last_part_time = time.monotonic()
+    
+            # если знаем ожидаемую длину — можно подвинуть границу окончания ожидания
+            if expected_total_len is not None and len(buf) < expected_total_len:
+                # при каждом приходе части даём ещё немного времени на следующую
+                t_end = max(t_end, time.monotonic() + inter_packet_grace)
+    
+        # Если знаем ожидаемую длину и мы её переполнили из-за лишних данных, обрежем
+        if expected_total_len is not None and len(buf) > expected_total_len:
+            buf = buf[:expected_total_len]
+    
+        # Минимальная валидация: правильный заголовок и хотя бы что-то после него
+        if len(buf) < header_len + 1:
+            return None
+    
+        return bytes(buf)
+
+
+    # def _wait_for_packet(self, id_byte: int, fc_byte: int, timeout: float) -> Optional[bytes]:
+    #     # Ожидание одного пакета заданного ID/FC с таймаутом
+    #     t0 = time.time()
+    #     data=None
+    #     while time.time() - t0 < timeout:
+            
+    #         datagram= self._recv_datagram(timeout=max(0.0, timeout - (time.time() - t0)))
+    #         if not datagram:
+    #             return data
+    #         else:
+
+    #     return None
 
     @staticmethod
     def _is_success_reply(data: Optional[bytes], expect_id: int, expect_fc: int) -> bool:
@@ -692,21 +789,20 @@ class Interrogator:
 
     def _parse_adc_single(self, data: bytes) -> dict:
         # 2.3.4: ответ содержит: ... ChannelNo/Gain (вариативно по прошивке) + ADC1..ADC2551 (u16)
-        # TODO: распарсить содержимое debug-пакета согласно мануалу
-        adc_count = 2551
-        adc_bytes = adc_count * 2
+        
+        
         # Смещение полезной нагрузки зависит от реализации прошивки — пробуем две схемы
-        if len(data) < adc_bytes + 6:
-            payload = data[4:]
-        else:
-            payload = data[2:]
-        if len(payload) < adc_bytes + 4:
-            raise ValueError("ADC single payload too short")
-        ch_no = payload[2] if len(payload) > 3 else 0
-        gain = payload[3] if len(payload) > 3 else 0
-        adc_raw = payload[-adc_bytes:]
-        adc = [(adc_raw[i] << 8) | adc_raw[i + 1] for i in range(0, len(adc_raw), 2)]
-        return {"channel": (ch_no & 0xFF) + 1, "gain_hex": gain & 0xFF, "adc_u16": adc}
+        # if len(data) < adc_bytes + 4:
+            # raise ValueError("ADC single payload too short")
+        
+        ch_no=int.from_bytes(data[6:8])
+        gain=int.from_bytes(data[8:10])
+        payload=data[10:]
+        # little-endian 16-бит беззнаковый
+        # spectrum = np.frombuffer(payload, dtype='<u2')  # shape: (len(payload)//2,)
+        u16 = np.frombuffer(payload, dtype='>u2')  # big-endian без копии
+        spectrum =10*self.gain_value(gain) + 10*np.log10(np.clip(u16, 1, None))-60 ## Не уверен на счет -60
+        return ch_no,gain,spectrum
 
     # ------------------- Утилита: карты скоростей -------------------
 
@@ -727,6 +823,23 @@ class Interrogator:
             raise ValueError(f"Unsupported sweep speed. Supported speeds are {mapping.keys()} Hz")
         return mapping[hz]
     
+    
+    # ------------------- Утилита: величины усилений -------------------
+
+    @staticmethod
+    def gain_value(gain: int) -> float:
+        # Таблица соответствия 
+        mapping = {
+            5: 2.9059*1e-6,
+            4: 4.356*1e-6,
+           3: 6.4699*1e-6,
+            2: 1.01289*1e-5,
+            1: 1.50849*1e-5,
+            0: 2.36161*1e-5
+        }
+        if gain not in mapping:
+            raise ValueError(f"Unsupported gain")
+        return mapping[gain]
     '''
     '''
  
@@ -736,9 +849,11 @@ class Interrogator:
 # ------------------- Пример использования -------------------
 
 if __name__ == "__main__":
-    it = Interrogator('10.2.60.37')
+    it = Interrogator('10.2.60.38','10.2.60.33')
 #%%
     # Прочитать идентификацию и параметры
+    import matplotlib.pyplot as plt
+    
     ver = it.read_version()
     sn = it.read_sn()
     mod = it.read_module_params()
@@ -761,7 +876,38 @@ if __name__ == "__main__":
     it.set_gain(ch, auto=True, manual_level=0)
     # Рекомендуется отключить ненужные каналы завышенным порогом:
     # for ch in (1,3,4): it.set_threshold(ch, 60000)
-
+    waves=it.get_waves()
+    #%%
+    time0=time.time()
+    times=[time0]
+    spectra=[]
+    for n in range(100):
+        spectrum=it.get_single_channel_spectrum(1)
+        times.append(time.time())
+        spectra.append(spectrum)
+    times=np.array(times)
+    times-=time0
+    time_gaps=np.diff(times)
+    print(np.mean(time_gaps),np.std(time_gaps))
+    plt.figure()
+    plt.plot(time_gaps)
+    plt.ylabel('Time to acquire a single spectrum, s')
+    plt.xlabel('Index of try')
+    
+    plt.figure()
+    for ii,s in enumerate(spectra):
+        plt.plot(waves, s+ii)
+    
+    plt.ylabel('Time to acquire a single spectrum, s')
+    plt.xlabel('Index of try')
+    
+    
+        
+    plt.figure()
+    plt.plot(waves,spectrum)
+    plt.xlabel('Wavelength, nm')
+    plt.ylabel('Spectral power, dBm')
+#%%
     # Запуск потока частот, чтение одного кадра и быстрый доступ к данным
     it.start_freq_stream()
     fr=it.pop_freq_frame()

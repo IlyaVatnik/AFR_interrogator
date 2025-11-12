@@ -9,16 +9,19 @@ from AFR_interrogator.FBGRecorder import live_plot_wavelengths
 import time
 
 
-it = Interrogator('10.2.60.37')
+it = Interrogator('10.2.60.38','10.2.60.33')
 #%%
-ch=1
+ch=2
 it.set_gain(ch, auto=False, manual_level=1)
 it.set_threshold(ch, 3000)
 time.sleep(0.1)
 it.start_freq_stream()
 
 # # 4) live-плот (запускать из главного GUI-потока)
-stop_live = live_plot_wavelengths(it, channel=1, fbg_indices=[0, 1, 2], window_sec=10.0, max_fps=100)
+# stop_live = live_plot_wavelengths(it, channel=ch, fbg_indices=[0,1,2], window_sec=10.0, max_fps=100)
+stop_live = live_plot_wavelengths(it, channel=ch, fbg_indices=[0], window_sec=10.0, max_fps=100)
+stop_live = live_plot_wavelengths(it, channel=ch, fbg_indices=[1], window_sec=10.0, max_fps=100)
+stop_live = live_plot_wavelengths(it, channel=ch, fbg_indices=[2], window_sec=10.0, max_fps=100)
 
     #%%
 # # ... когда нужно остановить:
