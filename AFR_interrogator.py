@@ -8,7 +8,7 @@ Created on Fri Oct 17 14:19:23 2025
 For the AFR Arcadia Optronix Interrogator
 """
 __version__='1.2'
-__date__='11.11.2025'
+__date__='12.11.2025'
 
 
 import socket
@@ -21,6 +21,10 @@ from collections import deque
 import numpy as np
 import math
 
+
+''''
+Лазер интеррогатора светит 1.2 мВт (12.11.2025, 4 канал)
+'''
 
 @dataclass
 class InterrogatorUDPConfig:
@@ -61,6 +65,8 @@ class Interrogator:
     FC_READ_FREQ = 0x02
     FC_DEBUG = 0x03
     FC_READ_ADC_SINGLE = 0x07
+    
+    POWER_CALIBRATION_COEFF=48 # dBm, получено из эксперимента
 
     def __init__(self, ip,
                  pc_ip,
@@ -104,6 +110,15 @@ class Interrogator:
         
         # При инициализации отправим STOP, чтобы модуль прекратил поток, если он был включён ранее
         self.stop_freq_stream()
+
+    def __del__(self):
+       # Никакой логики кроме попытки безопасного закрытия
+       try:
+           self._sock.shutdown(socket.SHUT_RDWR)
+           self._sock.close()
+       except Exception:
+           print('Error while close connection')
+           pass
 
     # ------------------- Утилиты конвертации -------------------
 
@@ -436,8 +451,9 @@ class Interrogator:
         adc = 0
         return freq, adc
 
-    def get_single_channel_spectrum(self, channel: int, timeout: float = 1.0) -> dict:
+    def get_single_spectrum(self, channel: int, timeout: float = 1.0) -> dict:
         # Разовый запрос ADC по одному каналу (2.3.4).
+        # channel =1..4
         # TODO: распарсить содержимое пакета согласно мануалу
         if channel < 1 or channel > 16:
             raise ValueError("Channel must be 1..16")
@@ -451,6 +467,8 @@ class Interrogator:
         return  spectrum
     
     def get_waves(self):
+        if self.sweep_stop_ghz==None:
+            self.read_sweep_config()
         return 299_792_458.0/np.arange(self.sweep_stop_ghz, self.sweep_start_ghz+self.ad_step_ghz,self.ad_step_ghz)
 
     # ------------------- Внутренние: приём/парсинг -------------------
@@ -796,12 +814,14 @@ class Interrogator:
             # raise ValueError("ADC single payload too short")
         
         ch_no=int.from_bytes(data[6:8])
-        gain=int.from_bytes(data[8:10])
+        gain=int.from_bytes(data[9:10])
         payload=data[10:]
         # little-endian 16-бит беззнаковый
         # spectrum = np.frombuffer(payload, dtype='<u2')  # shape: (len(payload)//2,)
         u16 = np.frombuffer(payload, dtype='>u2')  # big-endian без копии
-        spectrum =10*self.gain_value(gain) + 10*np.log10(np.clip(u16, 1, None))-60 ## Не уверен на счет -60
+        
+        spectrum =10*self.gain_value(gain) + 10*np.log10(u16) - self.POWER_CALIBRATION_COEFF
+        
         return ch_no,gain,spectrum
 
     # ------------------- Утилита: карты скоростей -------------------
@@ -856,15 +876,9 @@ if __name__ == "__main__":
     
     ver = it.read_version()
     sn = it.read_sn()
-    mod = it.read_module_params()
-    sweep = it.read_sweep_config()  # это также заполнит локальные поля свипа
-    ch_params=it.read_channel_params()
     print(f"Version: {ver}, SN: {sn}")
-    print("Module params:", mod)
-    print("Sweep cfg:", sweep)
-    print("Channel params:", ch_params)
-
-    # Настроить sweep (пример: 196250 -> 191150, шаги по умолчанию 2 ГГц)
+    
+    
     ok = it.set_sweep(start_freq_ghz=196250, stop_freq_ghz=191150, step_ghz=2, ad_step_ghz=2)
     print("Set sweep:", ok)
 
@@ -876,13 +890,24 @@ if __name__ == "__main__":
     it.set_gain(ch, auto=True, manual_level=0)
     # Рекомендуется отключить ненужные каналы завышенным порогом:
     # for ch in (1,3,4): it.set_threshold(ch, 60000)
-    waves=it.get_waves()
+    
+    mod = it.read_module_params()
+    sweep = it.read_sweep_config()  # это также заполнит локальные поля свипа
+    ch_params=it.read_channel_params()
+    print("Module params:", mod)
+    print("Sweep cfg:", sweep)
+    print("Channel params:", ch_params)
+
+    # Настроить sweep (пример: 196250 -> 191150, шаги по умолчанию 2 ГГц)
+ 
+    
     #%%
+    waves=it.get_waves()
     time0=time.time()
     times=[time0]
     spectra=[]
-    for n in range(100):
-        spectrum=it.get_single_channel_spectrum(1)
+    for n in range(10):
+        spectrum=it.get_single_spectrum(1)
         times.append(time.time())
         spectra.append(spectrum)
     times=np.array(times)
@@ -901,8 +926,11 @@ if __name__ == "__main__":
     plt.ylabel('Time to acquire a single spectrum, s')
     plt.xlabel('Index of try')
     
+    #%%
+    waves=it.get_waves()
+    it.set_gain(4, auto=False, manual_level=4) 
     
-        
+    spectrum=it.get_single_spectrum(4)
     plt.figure()
     plt.plot(waves,spectrum)
     plt.xlabel('Wavelength, nm')
@@ -915,6 +943,8 @@ if __name__ == "__main__":
     data=data[ch-1]
     print(time_stamp,data)
     it.stop()
+    #%%
+    del it
     
    
     
