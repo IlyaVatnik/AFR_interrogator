@@ -8,11 +8,11 @@ Created on Mon Oct 27 21:08:48 2025
 import matplotlib
 matplotlib.use("TkAgg")  # или TkAgg
 from AFR_interrogator.FBGRecorder import record_and_plot
-from AFR_interrogator.AFR_interrogator import Interrogator
+from AFR_interrogator.interrogator import Interrogator
 
 
 
-it = Interrogator('10.2.60.37')
+it = Interrogator('10.2.60.38','10.2.60.33')
 #%%
 # прибор уже создан
 it.set_gain(1, auto=False, manual_level=1)

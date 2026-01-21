@@ -201,7 +201,7 @@ class AFRConfiguratorRS232:
         return ok
    #%%
 if __name__ == "__main__":
-    it=AFRConfiguratorRS232('COM5')
+    it=AFRConfiguratorRS232('COM3')
     #%%
     settings=it.query_settings()
     print(settings)

@@ -63,6 +63,9 @@ class RecorderConfig:
     disable_gc_during_record: bool = True
 
     # Новый параметр: какой канал писать (None — все)
+    channels: Optional[List[int]] = None,        # 1-based
+    FBGs: Optional[List[List[int]]] = None, # 1-based
+    
     record_channel: Optional[int] = None
     # Расширенная фильтрация: список каналов и FBG (0-based). Если None — писать всё.
     record_channels: Optional[List[int]] = None
@@ -99,46 +102,64 @@ class RecorderStats:
 # ==========================
 # Утилиты
 # ==========================
-
 def make_header(it: Any,
                 channel_map: Optional[List[int]] = None,
                 fbg_map: Optional[List[List[int]]] = None) -> Dict[str, Any]:
     """
-    Строит заголовок. Если задан channel_map/fbg_map — пишется с version=5
-    и полями:
-      - original_channels, original_fbg_per_ch
+    Строит заголовок.
+
+    version=4: без карт выбора
+    version=5: хранит 0-based channel_map/fbg_map (как раньше уже сделано)
+    version=6: дополнительно хранит 1-based channel_list/FBGs_list (то, что просили)
+
+    Поля:
       - channel_map: List[int] (0-based индексы каналов)
-      - fbg_map: List[List[int]] (0-based индексы решёток по каждому каналу)
-    Если channel_map/fbg_map не заданы — поведение как раньше (version=4).
+      - fbg_map: List[List[int]] (0-based индексы решёток)
+      - channel_list: List[int] (1-based каналы, записанные в файл)
+      - FBGs_list: List[List[int]] (1-based решётки, записанные в файл)
     """
+    orig_channels = int(getattr(it, "channels", 0))
+    orig_fbg = int(getattr(it, "fbg_per_ch", 0))
+
     hdr: Dict[str, Any] = {
-        "channels": int(getattr(it, "channels", 0)),
-        "fbg_per_ch": int(getattr(it, "fbg_per_ch", 0)),
+        "channels": orig_channels,
+        "fbg_per_ch": orig_fbg,
         "version": 4,
         "format": "(ts_perf, ts_unix, pkt_ctr, wl[n_ch][fbg])",
     }
+
     if channel_map is not None or fbg_map is not None:
-        cm = list(map(int, channel_map or list(range(int(getattr(it, "channels", 0))))))
-        fm = []
-        orig_fbg = int(getattr(it, "fbg_per_ch", 0))
+        # --- 0-based карты (внутреннее представление) ---
+        cm = list(map(int, channel_map or list(range(orig_channels))))
+
         if fbg_map is None:
-            # по умолчанию: для каждого выбранного канала — все FBG
             fm = [list(range(orig_fbg)) for _ in cm]
         else:
             fm = [list(map(int, arr)) for arr in fbg_map]
 
+        # --- 1-based списки (то, что нужно пользователю) ---
+        channel_list = [c + 1 for c in cm]
+        FBGs_list = [[i + 1 for i in row] for row in fm]
+
         hdr.update({
-            "version": 5,
-            "original_channels": int(getattr(it, "channels", 0)),
+            "version": 6,  # было 5, стало 6 (расширили заголовок)
+            "original_channels": orig_channels,
             "original_fbg_per_ch": orig_fbg,
-            "channel_map": cm,
-            "fbg_map": fm,
-            "channels": len(cm),
-            # fbg_per_ch оставляем как «исходное» — для обратной совместимости
+
+            "channel_map": cm,     # 0-based
+            "fbg_map": fm,         # 0-based
+
+            "channel_list": channel_list,  # 1-based (НОВОЕ)
+            "FBGs_list": FBGs_list,        # 1-based (НОВОЕ)
+
+            "channels": len(cm),   # число выбранных каналов в данных
+            # оставляем fbg_per_ch как «исходное» для совместимости старого кода/ожиданий
             "fbg_per_ch": orig_fbg,
             "format": "(ts_perf, ts_unix, pkt_ctr, wl[n_selected_ch][n_selected_fbg_per_ch])",
         })
+
     return hdr
+
 
 def _write_block(fh, batch: List[Tuple[float, float, int, List[List[float]]]]) -> int:
     """Записать один length-prefixed блок с batch. Возвращает 1, если что-то записано, иначе 0."""
@@ -520,6 +541,8 @@ def record_to_file(it: Any,
         rate_window_sec=rate_window_sec,
         disable_gc_during_record=disable_gc_during_record,
         # обратная совместимость: если задан один канал и не задан список — используем старое поле
+        channels=channels,
+        FBGs=FBGs,
         record_channels=rec_channels_zb,
         record_fbg_map=rec_fbg_map_zb,
         write_every_n=int(write_every_n)
@@ -540,30 +563,48 @@ def read_fbg_stream_raw_lp(filepath: str):
       - times: np.ndarray [n_samples], секунд от первого кадра
       - channel_FBGs: List[np.ndarray], длиной n_selected_ch;
         каждый элемент — np.ndarray формы [n_selected_fbg(ch), n_samples].
+      - channel_list: List[int] (1-based каналы, записанные в файл)
+      - FBGs_list: List[List[int]] (1-based решётки по каждому записанному каналу)
 
     Поддерживает файлы:
       - version 4: равное кол-во FBG на канал (header["fbg_per_ch"])
-      - version 5: выбор каналов/FBG (header["channel_map"], header["fbg_map"])
+      - version 5/6: выбор каналов/FBG (header["channel_map"], header["fbg_map"])
+        version 6: дополнительно содержит channel_list/FBGs_list (1-based)
     """
     import numpy as np
     with open(filepath, "rb") as f:
         header = pickle.load(f)
         version = int(header.get("version", 4))
 
+        # --- определяем карты выбора (0-based) ---
         if version >= 5 and ("channel_map" in header) and ("fbg_map" in header):
             channel_map = list(map(int, header["channel_map"]))
             fbg_map = [list(map(int, row)) for row in header["fbg_map"]]
             n_ch = len(channel_map)
             fbg_counts = [len(row) for row in fbg_map]
+
+            # --- 1-based списки, которые нужно вернуть ---
+            if ("channel_list" in header) and ("FBGs_list" in header):
+                channel_list = list(map(int, header["channel_list"]))
+                FBGs_list = [list(map(int, row)) for row in header["FBGs_list"]]
+            else:
+                # fallback для version=5: восстановим 1-based из 0-based
+                channel_list = [c + 1 for c in channel_map]
+                FBGs_list = [[i + 1 for i in row] for row in fbg_map]
+
         else:
+            # version 4 (или любой старый без карт)
             channel_map = None
             fbg_map = None
             n_ch = int(header["channels"])
             fbg_per_ch = int(header["fbg_per_ch"])
             fbg_counts = [fbg_per_ch] * n_ch
 
+            # для старых файлов считаем, что записаны все
+            channel_list = list(range(1, n_ch + 1))
+            FBGs_list = [list(range(1, fbg_per_ch + 1)) for _ in range(n_ch)]
+
         t_perf: List[float] = []
-        # acc[ch][i] -> list[float]
         acc: List[List[List[float]]] = [[[] for _ in range(fbg_counts[ch])] for ch in range(n_ch)]
 
         while True:
@@ -588,7 +629,6 @@ def read_fbg_stream_raw_lp(filepath: str):
                 ts_p, ts_u, pkt_ctr, wl = rec
                 t_perf.append(float(ts_p))
 
-                # wl должен быть длиной n_ch
                 if not isinstance(wl, (list, tuple)):
                     wl = []
                 if len(wl) != n_ch:
@@ -596,25 +636,34 @@ def read_fbg_stream_raw_lp(filepath: str):
 
                 for ch in range(n_ch):
                     row = wl[ch]
-                    # нормализуем до нужного количества FBG для этого канала
                     need = fbg_counts[ch]
                     cur = []
                     if isinstance(row, (list, tuple)):
                         cur = [float(x) for x in row[:need]]
-                    # добить NaN при нехватке
                     if len(cur) < need:
                         cur = cur + [float("nan")] * (need - len(cur))
                     for i in range(need):
                         acc[ch][i].append(cur[i])
 
-    
     t_perf_arr = np.asarray(t_perf, dtype=float)
     if t_perf_arr.size == 0:
-        return t_perf_arr, []
+        # channels: {ch(1-based): {fbg(1-based): np.ndarray[n_samples]}}
+        return t_perf_arr, {}, channel_list, FBGs_list   
+
     t0 = t_perf_arr[0]
     times = t_perf_arr - t0
     channel_FBGs = [np.asarray(acc[ch], dtype=float) for ch in range(len(acc))]
-    return times, channel_FBGs
+    # Собираем удобную структуру без классов:
+    # channels[ch][fbg] -> np.ndarray [n_samples], где ch и fbg — 1-based.
+    channels: Dict[int, Dict[int, np.ndarray]] = {}
+    for i, ch in enumerate(channel_list):      # channel_list 1-based
+        arr = channel_FBGs[i]                  # shape: [n_fbg, n_samples]
+        fbgs = list(FBGs_list[i])              # 1-based ids aligned with rows in arr
+        channels[int(ch)] = {int(fbg_id): arr[j, :] for j, fbg_id in enumerate(fbgs)}
+
+    return times, channels, channel_list, FBGs_list
+    
+
 
 class FrameFanout:
     """

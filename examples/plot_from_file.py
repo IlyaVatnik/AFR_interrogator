@@ -10,7 +10,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 file=r"C:\Users\Илья\fbg_dump.pkl"
 # 3) прочитать файл
-times, channels = read_fbg_stream_raw_lp(file)
+times, channels, channel_list, FBGs_list = read_fbg_stream_raw_lp(file)
+print('In this file there are channels {} and FBGs {} in these channels'.format(channel_list,FBGs_list))
 
 print("samples:", times.size, "channels:", len(channels), "shape ch0:", channels[0].shape)
 #%%

@@ -5,13 +5,13 @@ Created on Mon Oct 27 20:26:04 2025
 @author: User
 """
 
-from AFR_interrogator.AFR_interrogator import Interrogator
+from AFR_interrogator.interrogator import Interrogator
 from AFR_interrogator.FBGRecorder import record_to_file
 import time
 import numpy as np
 
 
-it = Interrogator('10.2.60.37')
+it = Interrogator('10.2.60.38','10.2.60.33')
 #%%
   # Сбор данных 5 секунд
 ch=1
