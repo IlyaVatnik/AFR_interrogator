@@ -6,7 +6,7 @@ Created on Mon Oct 27 21:08:48 2025
 """
 
 import matplotlib
-matplotlib.use("TkAgg")  # или TkAgg
+# matplotlib.use("TkAgg")  # или TkAgg
 from AFR_interrogator.FBGRecorder import record_and_plot
 from AFR_interrogator.interrogator import Interrogator
 

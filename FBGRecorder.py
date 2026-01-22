@@ -504,7 +504,7 @@ def record_to_file(it: Any,
     
     
     
-    configure_headless_matplotlib()
+    # configure_headless_matplotlib()
     import gc as _gc
     _gc.collect()
 
@@ -723,30 +723,38 @@ class FrameFanout:
 # ==========================
 # Live‑plot в реальном времени
 # ==========================
-
+# Исправление: record_and_plot должен сам закрывать окно графика и останавливать запись,
+# когда прошло duration_sec.
+#
+# Сейчас у вас writer_thread сам заканчивается по t_end, но live_plot_wavelengths НЕ закрывается
+# автоматически (blocking=False лишь делает show неблокирующим, окно остаётся жить).
+#
+# Решение: в record_and_plot запускаем таймер, который:
+#   1) stop_event.set()  -> останавливает writer_thread
+#   2) stop_plot()       -> закрывает окно matplotlib (plt.close(fig))
+#   3) fan.stop()        -> останавливает fanout
+#
+# Важно: закрывать matplotlib-окно лучше из главного потока (GUI). Поэтому:
+#   - Если есть активный backend (Qt/Tk), используем "GUI timer":
+#       fig.canvas.new_timer(...)
+#   - И как fallback — threading.Timer (может сработать, но GUI-бэкенды иногда ругаются)
 
 def record_and_plot(it: Any,
                     filepath: str,
                     duration_sec: float,
-                    # НОВОЕ: выборка для записи (1-based)
                     channels: Optional[List[int]] = None,
                     FBGs: Optional[List[List[int]]] = None,
-                    # НОВОЕ: писать каждый n-ый кадр
                     write_every_n: int = 1,
-                    # live-плот
-                    plot_channel: int = 1,  # ВНИМАНИЕ: для пользователя 1-based (как в docstring live_plot)
+                    plot_channel: int = 1,
                     plot_fbg_indices: List[int] = (0, 1, 2),
                     window_sec: float = 10.0,
                     max_fps: int = 30,
                     ylim: Optional[Tuple[float, float]] = None,
                     title: Optional[str] = None,
                     ) -> Tuple[Callable[[], None], Dict[str, Any]]:
-    """
-    Одновременные запись в файл и live-отрисовка.
-    Возвращает: stop_all(), stats_dict.
-    """
+
     import gc
-    import threading            # <-- импорт раньше первого использования
+    import threading
     from queue import Queue, Empty
     import time
 
@@ -756,8 +764,7 @@ def record_and_plot(it: Any,
     DROP_DURING_WARMUP = True
     START_DELAY_SEC = 0.3
     DISABLE_GC_DURING_RECORD = True
-    
-    # Подготовим карты выбора (1-based -> 0-based)
+
     ch_map_0 = None
     fbg_map_0 = None
     if channels is not None:
@@ -767,21 +774,17 @@ def record_and_plot(it: Any,
                 raise ValueError("Длина FBGs должна совпадать с длиной channels")
             fbg_map_0 = [[int(i) - 1 for i in arr] for arr in FBGs]
 
-    # Небольшая задержка для старта потока устройства (внутренняя, фиксированная)
     if START_DELAY_SEC > 0:
         time.sleep(START_DELAY_SEC)
 
-    # Очереди для писателя и для графика
     q_rec: "Queue[Tuple[float, List[List[float]]]]" = Queue(maxsize=50000)
     q_plot: "Queue[Tuple[float, List[List[float]]]]" = Queue(maxsize=10000)
 
-    # Fanout
     fan = FrameFanout(it, idle_sleep=0.0002)
     fan.add_consumer_queue(q_rec)
     fan.add_consumer_queue(q_plot)
     fan.start()
 
-    # Статистика записи
     stats = {
         "started_at": time.perf_counter(),
         "wr_frames": 0,
@@ -803,13 +806,11 @@ def record_and_plot(it: Any,
         if DISABLE_GC_DURING_RECORD and gc_was_enabled:
             gc.disable()
 
-        # частота отбора: каждый n‑ый
         write_every = max(1, int(write_every_n))
         taken_ctr = 0
 
         try:
             with open(filepath, "wb") as f:
-                # Заголовок: добавляем карты, если заданы
                 header = make_header(it, channel_map=ch_map_0, fbg_map=fbg_map_0)
                 pickle.dump(header, f, protocol=pickle.HIGHEST_PROTOCOL)
 
@@ -848,12 +849,10 @@ def record_and_plot(it: Any,
                     if not writing_active and DROP_DURING_WARMUP:
                         continue
 
-                    # Отбор каждого n-го
                     taken_ctr += 1
                     if (taken_ctr % write_every) != 0:
                         continue
 
-                    # Фильтрация каналов/FBG для записи
                     if ch_map_0 is None:
                         wl_rows = [[float(x) for x in row] for row in wl_full]
                     else:
@@ -871,9 +870,8 @@ def record_and_plot(it: Any,
 
                     ts_unix = time.time()
                     pkt_ctr = -1
-                    rec = (float(t_perf), float(ts_unix), int(pkt_ctr), wl_rows)
+                    batch.append((float(t_perf), float(ts_unix), int(pkt_ctr), wl_rows))
 
-                    batch.append(rec)
                     stats["wr_frames"] += 1
                     wr_count_since += 1
 
@@ -885,7 +883,6 @@ def record_and_plot(it: Any,
                         wr_count_since = 0
                         last_wr = now
 
-                # финальный сброс
                 if writing_active:
                     flush_batch()
                 f.flush()
@@ -897,8 +894,8 @@ def record_and_plot(it: Any,
     wr_thr = threading.Thread(target=writer_thread, name="FBG-Writer", daemon=True)
     wr_thr.start()
 
-    # Live‑плот — без изменений производительности; канал в live_plot — 1-based (как и было)
-    stop_plot = live_plot_wavelengths(
+    # ---- Live plot ----
+    stop_plot,fig = live_plot_wavelengths(
         it=it,
         channel=plot_channel,
         fbg_indices=list(plot_fbg_indices),
@@ -910,20 +907,49 @@ def record_and_plot(it: Any,
         source_queue=q_plot
     )
 
+    # ---- НОВОЕ: авто-остановка/авто-закрытие по duration_sec ----
+    stop_called = threading.Event()
+
     def stop_all():
+        # делаем идемпотентным (можно вызвать несколько раз)
+        if stop_called.is_set():
+            return
+        stop_called.set()
+
+        # 1) остановить writer loop
+        stop_event.set()
+
+        # 2) закрыть окно графика (должно быть в GUI-потоке)
         try:
             stop_plot()
         except Exception:
             pass
-        stop_event.set()
-        try:
-            wr_thr.join(timeout=2.0)
-        except Exception:
-            pass
+
+        # 3) остановить fanout
         try:
             fan.stop(timeout=1.0)
         except Exception:
             pass
+
+        # 4) дождаться writer
+        try:
+            wr_thr.join(timeout=2.0)
+        except Exception:
+            pass
+        
+        it.stop_freq_stream()
+
+    # Ставим "GUI timer" через matplotlib backend
+    try:
+       
+        timer = fig.canvas.new_timer(interval=int(float(duration_sec) * 1000))
+        timer.single_shot = True
+        timer.add_callback(stop_all)
+        timer.start()
+        timer.start()
+    except Exception:
+        # fallback: потоковый таймер (может быть менее надёжен на некоторых GUI)
+        threading.Timer(duration_sec, stop_all).start()
 
     return stop_all, stats
 
@@ -1082,11 +1108,10 @@ def live_plot_wavelengths(it,
 
         return list(lines.values())
 
-
     interval_ms = max(1, int(1000 / max_fps))
     ani = FuncAnimation(fig, update, interval=interval_ms, blit=False,
                         cache_frame_data=False, save_count=1000)
-    fig._live_anim_ref = ani  # сильная ссылка, чтобы GC не удалил анимацию
+    fig._live_anim_ref = ani  # сильная ссылка
 
     def _on_close(event=None):
         stop_event.set()
@@ -1099,6 +1124,12 @@ def live_plot_wavelengths(it,
     cid = fig.canvas.mpl_connect("close_event", _on_close)
 
     def stop():
+        # ВАЖНО: сначала остановить источник событий анимации
+        try:
+            ani.event_source.stop()
+        except Exception:
+            pass
+
         try:
             import matplotlib.pyplot as _plt
             try:
@@ -1113,7 +1144,7 @@ def live_plot_wavelengths(it,
     if not blocking:
         plt.pause(0.05)
 
-    return stop
+    return stop, fig
 
 def safe_stop_interrogator(it: Any, join_timeout: float = 2.0) -> None:
     """

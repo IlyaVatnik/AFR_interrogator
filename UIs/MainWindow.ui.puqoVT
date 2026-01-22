@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>617</width>
+    <width>729</width>
     <height>404</height>
    </rect>
   </property>
@@ -25,7 +25,7 @@
         <rect>
          <x>0</x>
          <y>0</y>
-         <width>599</width>
+         <width>711</width>
          <height>131</height>
         </rect>
        </property>
@@ -48,7 +48,7 @@
        <widget class="QPushButton" name="pushButton_set_it_parameters">
         <property name="geometry">
          <rect>
-          <x>360</x>
+          <x>240</x>
           <y>20</y>
           <width>220</width>
           <height>23</height>
@@ -58,42 +58,13 @@
          <string>Set interrogator parameters</string>
         </property>
        </widget>
-       <widget class="QPushButton" name="pushButton_choose_folder_to_save">
-        <property name="geometry">
-         <rect>
-          <x>10</x>
-          <y>90</y>
-          <width>131</width>
-          <height>23</height>
-         </rect>
-        </property>
-        <property name="text">
-         <string>Choose folder to save</string>
-        </property>
-       </widget>
-       <widget class="QLabel" name="label_folder_to_save">
-        <property name="geometry">
-         <rect>
-          <x>230</x>
-          <y>90</y>
-          <width>51</width>
-          <height>23</height>
-         </rect>
-        </property>
-        <property name="text">
-         <string>none</string>
-        </property>
-        <property name="alignment">
-         <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
-        </property>
-       </widget>
       </widget>
       <widget class="QWidget" name="page_2">
        <property name="geometry">
         <rect>
          <x>0</x>
          <y>0</y>
-         <width>599</width>
+         <width>711</width>
          <height>131</height>
         </rect>
        </property>
@@ -130,7 +101,7 @@
         <property name="geometry">
          <rect>
           <x>180</x>
-          <y>92</y>
+          <y>90</y>
           <width>51</width>
           <height>23</height>
          </rect>
@@ -146,7 +117,7 @@
         <property name="geometry">
          <rect>
           <x>290</x>
-          <y>92</y>
+          <y>90</y>
           <width>51</width>
           <height>23</height>
          </rect>
@@ -158,11 +129,11 @@
          <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
         </property>
        </widget>
-       <widget class="QLineEdit" name="lineEdit_file_name_to_save_spectrum">
+       <widget class="QLineEdit" name="lineEdit_file_name_2">
         <property name="geometry">
          <rect>
           <x>240</x>
-          <y>94</y>
+          <y>90</y>
           <width>51</width>
           <height>20</height>
          </rect>
@@ -196,8 +167,8 @@
         <property name="geometry">
          <rect>
           <x>10</x>
-          <y>60</y>
-          <width>221</width>
+          <y>50</y>
+          <width>131</width>
           <height>23</height>
          </rect>
         </property>
@@ -205,11 +176,40 @@
          <string>Start recording</string>
         </property>
        </widget>
+       <widget class="QPushButton" name="pushButton_choose_folder_to_save">
+        <property name="geometry">
+         <rect>
+          <x>10</x>
+          <y>20</y>
+          <width>131</width>
+          <height>23</height>
+         </rect>
+        </property>
+        <property name="text">
+         <string>Choose folder to save</string>
+        </property>
+       </widget>
+       <widget class="QLabel" name="label_folder_to_save">
+        <property name="geometry">
+         <rect>
+          <x>170</x>
+          <y>20</y>
+          <width>51</width>
+          <height>23</height>
+         </rect>
+        </property>
+        <property name="text">
+         <string>none</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+        </property>
+       </widget>
        <widget class="QLineEdit" name="lineEdit_file_name">
         <property name="geometry">
          <rect>
-          <x>456</x>
-          <y>62</y>
+          <x>320</x>
+          <y>20</y>
           <width>51</width>
           <height>20</height>
          </rect>
@@ -224,8 +224,8 @@
        <widget class="QLabel" name="label_folder_to_save_2">
         <property name="geometry">
          <rect>
-          <x>396</x>
-          <y>62</y>
+          <x>260</x>
+          <y>20</y>
           <width>51</width>
           <height>23</height>
          </rect>
@@ -240,8 +240,8 @@
        <widget class="QLabel" name="label_folder_to_save_3">
         <property name="geometry">
          <rect>
-          <x>496</x>
-          <y>62</y>
+          <x>360</x>
+          <y>20</y>
           <width>51</width>
           <height>23</height>
          </rect>
@@ -256,30 +256,14 @@
        <widget class="QPushButton" name="pushButton_set_recording_parameters">
         <property name="geometry">
          <rect>
-          <x>10</x>
-          <y>90</y>
+          <x>240</x>
+          <y>50</y>
           <width>220</width>
           <height>23</height>
          </rect>
         </property>
         <property name="text">
          <string>Set recording parameters</string>
-        </property>
-       </widget>
-       <widget class="QPushButton" name="pushButton_plot_live_dynamics">
-        <property name="geometry">
-         <rect>
-          <x>10</x>
-          <y>10</y>
-          <width>221</width>
-          <height>23</height>
-         </rect>
-        </property>
-        <property name="text">
-         <string>Plot live dynamics</string>
-        </property>
-        <property name="checkable">
-         <bool>true</bool>
         </property>
        </widget>
       </widget>
@@ -349,7 +333,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>617</width>
+     <width>729</width>
      <height>21</height>
     </rect>
    </property>
