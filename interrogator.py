@@ -536,28 +536,21 @@ class Interrogator:
                 last_log = now
 
     def _wait_for_packet(self, id_byte: int, fc_byte: int, timeout: float) -> Optional[bytes]:
-            if not d:
-                # небольшой грейс, чтобы дождаться возможно потерявшейся части
-                if time.monotonic() - last_part_time > inter_packet_grace:
-                    break
-                    continue
-    
-            buf += d
-            # если знаем ожидаемую длину — можно подвинуть границу окончания ожидания
-            if expected_total_len is not None and len(buf) < expected_total_len:
-                # при каждом приходе части даём ещё немного времени на следующую
-    
-        # Если знаем ожидаемую длину и мы её переполнили из-за лишних данных, обрежем
-        if expected_total_len is not None and len(buf) > expected_total_len:
-            buf = buf[:expected_total_len]
-    
-        # Минимальная валидация: правильный заголовок и хотя бы что-то после него
-        if len(buf) < header_len + 1:
-            return None
+           """
+           Ждёт и собирает многочастный ответ:
            - Первая дейтаграмма: содержит заголовок протокола (header_len байт) + начало payload.
            - Последующие дейтаграммы: содержат только продолжение payload (без заголовка).
            Возвращает: склеенный кадр (один заголовок + полный payload) либо None по таймауту.
+           """
+           header_len = 6  # длина заголовка вашего протокола (ID, FC, len, ...)
        
+           t_end = time.monotonic() + timeout
+       
+           # Шаг 1: дождаться первой дейтаграммы с нужными ID/FC
+           first = None
+           while time.monotonic() < t_end:
+               dt = max(0.0, t_end - time.monotonic())
+               d = self._recv_datagram(timeout=dt)
                if not d:
                    return None
                if len(d) >= 2 and d[0] == id_byte and d[1] == fc_byte:
