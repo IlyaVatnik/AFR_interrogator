@@ -201,15 +201,15 @@ class AFRConfiguratorRS232:
         return ok
    #%%
 if __name__ == "__main__":
-    it=AFRConfiguratorRS232('COM3')
+    it=AFRConfiguratorRS232('COM5')
     #%%
     settings=it.query_settings()
     print(settings)
 
 #%%
 
-    it.set_settings(src_ip='10.2.60.38',dst_ip='10.2.60.33')
-    
+    # it.set_settings(src_ip='10.2.60.38',dst_ip='10.2.60.126')
+    it.set_settings(src_ip='10.2.15.150',dst_ip='10.2.15.158')
     #%%
     settings=it.query_settings()
     print(settings)

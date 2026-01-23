@@ -7,8 +7,8 @@ Created on Fri Oct 17 14:19:23 2025
 
 For the AFR Arcadia Optronix Interrogator
 """
-__version__='1.3'
-__date__='2026.01.22'
+__version__='1.4'
+__date__='2026.01.23'
 
 
 import socket
@@ -107,11 +107,14 @@ class Interrogator:
         self.sweep_step_ghz: Optional[float] = None    # шаг между FBG (из команды)
         self.ad_step_ghz: Optional[float] = None       # AD шаг сетки (между индексами)
         self.sweep_direction_decreasing: Optional[bool] = None  # True, если свип идёт в сторону убывания частоты
+        self.waves=None # массив длин волн, на которых измеряется спектр при текущей конфигурации свипа
         
         # При инициализации отправим STOP, чтобы модуль прекратил поток, если он был включён ранее
         self.stop_freq_stream()
         
         self._rx_queue = deque()
+        
+        self.update_waves()
 
     def __del__(self):
        # Никакой логики кроме попытки безопасного закрытия
@@ -346,6 +349,7 @@ class Interrogator:
             self.sweep_step_ghz = float(step_ghz)
             self.ad_step_ghz = float(ad_step_ghz)
             self.sweep_direction_decreasing = self.sweep_start_ghz > self.sweep_stop_ghz
+            self.update_waves()
         return ok
 
     def set_threshold(self, channel: int, threshold: int, timeout: float = 1.0) -> bool:
@@ -484,11 +488,13 @@ class Interrogator:
         
         return  spectrum
     
-    def get_waves(self):
+    def update_waves(self):
         if self.sweep_stop_ghz==None:
             self.read_sweep_config()
-        return 299_792_458.0/np.arange(self.sweep_stop_ghz, self.sweep_start_ghz+self.ad_step_ghz,self.ad_step_ghz)
+        self.waves=299_792_458.0/(np.arange(self.sweep_stop_ghz, self.sweep_start_ghz+self.ad_step_ghz,self.ad_step_ghz))
 
+    def get_waves(self):
+        return self.waves
     # ------------------- Внутренние: приём/парсинг -------------------
     
     def _rx_loop(self):
@@ -534,95 +540,96 @@ class Interrogator:
                 print(f"RX fps ~ {recv_cnt/(now-last_log):.0f} pkt/s, ring={len(self._ring)}/{self.cfg.ring_size}")
                 recv_cnt = 0
                 last_log = now
-
-    def _wait_for_packet(self, id_byte: int, fc_byte: int, timeout: float) -> Optional[bytes]:
-           """
-           Ждёт и собирает многочастный ответ:
-           - Первая дейтаграмма: содержит заголовок протокола (header_len байт) + начало payload.
-           - Последующие дейтаграммы: содержат только продолжение payload (без заголовка).
-           Возвращает: склеенный кадр (один заголовок + полный payload) либо None по таймауту.
-           """
-           header_len = 6  # длина заголовка вашего протокола (ID, FC, len, ...)
-       
-           t_end = time.monotonic() + timeout
-       
-           # Шаг 1: дождаться первой дейтаграммы с нужными ID/FC
-           first = None
-           while time.monotonic() < t_end:
-               dt = max(0.0, t_end - time.monotonic())
-               d = self._recv_datagram(timeout=dt)
-               if not d:
-                   return None
-               if len(d) >= 2 and d[0] == id_byte and d[1] == fc_byte:
-                   first = d
-                   break
-           if first is None:
-               return None
-           if len(first) < header_len:
-               # Невалидный стартовый пакет
-               return None
-       
-           # Шаг 2: определить ожидаемую полную длину кадра
-           # Пытаемся прочитать поле длины из заголовка (обычно little-endian в bytes[2:4]).
-           expected_total_len = None
-           try:
-               total_len_field = int.from_bytes(first[2:4], 'little', signed=False)
-               # Если поле — длина полезной нагрузки, то полный кадр = header + payload_len
-               if total_len_field > 0:
-                   expected_total_len = header_len + total_len_field
-           except Exception:
-               pass
-       
-           # Фолбэк: для одиночного спектра знаем заранее размер полезной части
-           if expected_total_len is None and fc_byte == self.FC_READ_ADC_SINGLE:
-               # 2 байта канал + 2 байта усиление + 2551 точка по 2 байта = 5106 байт payload
-               expected_total_len = header_len + (2 + 2 + 2551 * 2)
-       
-           # Если так и не удалось — будем просто собирать, пока не исчерпаем таймаут
-           # Но лучше всегда иметь ожидаемую длину.
-           buf = bytearray()
-           buf += first  # первая дейтаграмма целиком (с заголовком)
-       
     
-       
-           # Шаг 3: дочитываем хвосты (чистый payload без заголовка)
-           # Немного продлим окно ожидания «хвостов», чтобы не обрубать слишком рано.
-           t_end = max(t_end, time.monotonic() + 0.001)
-           inter_packet_grace = 0.001  # перезапас между частями
-           last_part_time = time.monotonic()
-       
-           while time.monotonic() < t_end:
-               # Если знаем длину — выходим, как только набрали её
-               if expected_total_len is not None and len(buf) >= expected_total_len:
-                   break
-       
-               dt = max(0.0, t_end - time.monotonic())
-               d = self._recv_datagram(timeout=dt)
-               if not d:
-                   # небольшой грейс, чтобы дождаться возможно потерявшейся части
-                   if time.monotonic() - last_part_time > inter_packet_grace:
-                       break
-                   else:
-                       continue
-       
-               # ВАЖНО: последующие дейтаграммы — это продолжение payload без заголовка.
-               buf += d
-               last_part_time = time.monotonic()
-       
-               # если знаем ожидаемую длину — можно подвинуть границу окончания ожидания
-               if expected_total_len is not None and len(buf) < expected_total_len:
-                   # при каждом приходе части даём ещё немного времени на следующую
-                   t_end = max(t_end, time.monotonic() + inter_packet_grace)
-       
-           # Если знаем ожидаемую длину и мы её переполнили из-за лишних данных, обрежем
-           if expected_total_len is not None and len(buf) > expected_total_len:
-               buf = buf[:expected_total_len]
-       
-           # Минимальная валидация: правильный заголовок и хотя бы что-то после него
-           if len(buf) < header_len + 1:
-               return None
-       
-           return bytes(buf)
+    def _wait_for_packet(self, id_byte: int, fc_byte: int, timeout: float) -> Optional[bytes]:
+            """
+            Ждёт и собирает многочастный ответ:
+            - Первая дейтаграмма: содержит заголовок протокола (header_len байт) + начало payload.
+            - Последующие дейтаграммы: содержат только продолжение payload (без заголовка).
+            Возвращает: склеенный кадр (один заголовок + полный payload) либо None по таймауту.
+            """
+            header_len = 6  # длина заголовка вашего протокола (ID, FC, len, ...)
+        
+            t_end = time.monotonic() + timeout
+        
+            # Шаг 1: дождаться первой дейтаграммы с нужными ID/FC
+            first = None
+            while time.monotonic() < t_end:
+                dt = max(0.0, t_end - time.monotonic())
+                d = self._recv_datagram(timeout=dt)
+                if not d:
+                    return None
+                if len(d) >= 2 and d[0] == id_byte and d[1] == fc_byte:
+                    first = d
+                    break
+            if first is None:
+                return None
+            if len(first) < header_len:
+                # Невалидный стартовый пакет
+                return None
+        
+            # Шаг 2: определить ожидаемую полную длину кадра
+            # Пытаемся прочитать поле длины из заголовка (обычно little-endian в bytes[2:4]).
+            expected_total_len = None
+            try:
+                total_len_field = int.from_bytes(first[2:4], 'little', signed=False)
+                # Если поле — длина полезной нагрузки, то полный кадр = header + payload_len
+                if total_len_field > 0:
+                    expected_total_len = header_len + total_len_field
+            except Exception:
+                pass
+        
+            # Фолбэк: для одиночного спектра знаем заранее размер полезной части
+            if expected_total_len is None and fc_byte == self.FC_READ_ADC_SINGLE:
+                # 2 байта канал + 2 байта усиление + 2551 точка по 2 байта = 5106 байт payload
+                expected_total_len = header_len + (2 + 2 + 2551 * 2)
+        
+            # Если так и не удалось — будем просто собирать, пока не исчерпаем таймаут
+            # Но лучше всегда иметь ожидаемую длину.
+            buf = bytearray()
+            buf += first  # первая дейтаграмма целиком (с заголовком)
+        
+     
+        
+            # Шаг 3: дочитываем хвосты (чистый payload без заголовка)
+            # Немного продлим окно ожидания «хвостов», чтобы не обрубать слишком рано.
+            t_end = max(t_end, time.monotonic() + 0.001)
+            inter_packet_grace = 0.001  # перезапас между частями
+            last_part_time = time.monotonic()
+        
+            while time.monotonic() < t_end:
+                # Если знаем длину — выходим, как только набрали её
+                if expected_total_len is not None and len(buf) >= expected_total_len:
+                    break
+        
+                dt = max(0.0, t_end - time.monotonic())
+                d = self._recv_datagram(timeout=dt)
+                if not d:
+                    # небольшой грейс, чтобы дождаться возможно потерявшейся части
+                    if time.monotonic() - last_part_time > inter_packet_grace:
+                        break
+                    else:
+                        continue
+        
+                # ВАЖНО: последующие дейтаграммы — это продолжение payload без заголовка.
+                buf += d
+                last_part_time = time.monotonic()
+        
+                # если знаем ожидаемую длину — можно подвинуть границу окончания ожидания
+                if expected_total_len is not None and len(buf) < expected_total_len:
+                    # при каждом приходе части даём ещё немного времени на следующую
+                    t_end = max(t_end, time.monotonic() + inter_packet_grace)
+        
+            # Если знаем ожидаемую длину и мы её переполнили из-за лишних данных, обрежем
+            if expected_total_len is not None and len(buf) > expected_total_len:
+                buf = buf[:expected_total_len]
+        
+            # Минимальная валидация: правильный заголовок и хотя бы что-то после него
+            if len(buf) < header_len + 1:
+                return None
+        
+            return bytes(buf)
+
 
 
     # def _wait_for_packet(self, id_byte: int, fc_byte: int, timeout: float) -> Optional[bytes]:

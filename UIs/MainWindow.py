@@ -6,7 +6,7 @@ Created on Wed Jan 21 11:32:18 2026
 """
 
 __version__='1.1'
-__date__='2026.22.01'
+__date__='2026.01.23'
 
 import os
     
@@ -39,6 +39,7 @@ class Params_it():
         self.gains_auto=[0,0,0,0]
         self.gains_manual=[1,1,1,1]
         self.thresholds=[3000,3000,3000,3000]
+        self.number_of_average_for_single_FBG_measurement=5
         
 class Params_recording():
     def __init__(self):      
@@ -125,6 +126,7 @@ class MainWindow(ThreadedMainWindow):
         self.load_parameters_from_file()
         
         self.it=None
+
         
   
         
@@ -192,7 +194,10 @@ class MainWindow(ThreadedMainWindow):
 
     def single_measurement(self):
         try:
-            FBGs=self.it.get_single_FBG_measurement()
+            FBGs_list=[]
+            for i in range(self.params.it.number_of_average_for_single_FBG_measurement):
+                FBGs_list.append(self.it.get_single_FBG_measurement())
+            FBGs=average_FBG_measurements(FBGs_list)
             for ch in self.params.it.channels:
                 if FBGs[ch-1] is not None:
                     self.logText( f'channel{ch}:  '+(", ".join(f"{x:.4f}" for x in FBGs[ch-1]))+ ' nm')
@@ -491,3 +496,38 @@ def get_parameters(obj) -> dict:
     d = dict(vars(obj)).copy()  # make a copy of the vars dictionary
     return d
 
+
+def average_FBG_measurements(data):
+    
+    
+    num_lists = len(data)
+    max_length = len(data[0])  # Количество подсписков
+    
+    # Создаем списки для сумм и счетчиков
+    sums = [[] for _ in range(max_length)]
+    counts = [[] for _ in range(max_length)]
+    
+    # Обрабатываем каждый входной список
+    for lst in data:
+        for i, inner in enumerate(lst):
+            # Если подсписок не пустой, добавляем элементы в sums и counts
+            if inner:
+                # Инициализируем sums и counts для этого подсписка
+                if len(sums[i]) == 0:
+                    sums[i] = [0] * len(inner)  # Инициализация массива сумм
+                    counts[i] = [0] * len(inner)  # Инициализация массива счетчиков
+                
+                for j, value in enumerate(inner):
+                    sums[i][j] += value
+                    counts[i][j] += 1
+    
+    # Формируем средние значения
+    averages = []
+    for i in range(max_length):
+        if counts[i]:  # Проверяем, что есть счетчики для этого подсписка
+            avg = [sums[i][j] / counts[i][j] if counts[i][j] > 0 else np.nan for j in range(len(sums[i]))]
+            averages.append(avg)
+        else:
+            averages.append([])  # Если нет счетчиков, добавляем пустой список
+
+    return averages

@@ -3,8 +3,8 @@ from UIs.MainWindow import MainWindow
 from PyQt5 import QtWidgets
 from packaging import version
 import sys
-__version__ = '1.1'
-__date__ = '2026.01.22'
+__version__ = '1.2'
+__date__ = '2026.01.23'
 
 
 # from conda import __version__ as condaVersion
@@ -19,7 +19,7 @@ def main():
     main_app = MainWindow(version=__version__, date=__date__)
     main_app.show()
     # Uncomment only if application doesn't finish properly
-    # sys.exit(app.exec())
+    sys.exit(app.exec())
     return main_app
  
 
