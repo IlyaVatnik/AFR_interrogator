@@ -17,8 +17,8 @@ FBGrecorder.py — безопасная безголовая запись пот
 Live-плот: live_plot_wavelengths(it, channel, fbg_indices, ...) — запускайте из главного потока GUI.
 """
 
-__version__='1.0'
-__date__='27.10.2025'
+__version__='1.2'
+__date__='2026.01.27'
 
 
 
@@ -73,6 +73,7 @@ class RecorderConfig:
     
     # Новый параметр: записывать только каждый n-ый кадр (после прогрева). 1 = писать каждый.
     write_every_n: int = 1
+    other_params: Optional[Dict] = None # любые другие параметры, которые надо сохранить в файл
 
 
 @dataclass
@@ -104,7 +105,8 @@ class RecorderStats:
 # ==========================
 def make_header(it: Any,
                 channel_map: Optional[List[int]] = None,
-                fbg_map: Optional[List[List[int]]] = None) -> Dict[str, Any]:
+                fbg_map: Optional[List[List[int]]] = None,
+                other_params: Optional[Dict] = None) -> Dict[str, Any]:
     """
     Строит заголовок.
 
@@ -156,6 +158,7 @@ def make_header(it: Any,
             # оставляем fbg_per_ch как «исходное» для совместимости старого кода/ожиданий
             "fbg_per_ch": orig_fbg,
             "format": "(ts_perf, ts_unix, pkt_ctr, wl[n_selected_ch][n_selected_fbg_per_ch])",
+            'other_params': other_params
         })
 
     return hdr
@@ -404,7 +407,7 @@ class FBGRecorder:
                 elif self.cfg.record_channel is not None:
                     ch_map = [int(self.cfg.record_channel)]
 
-                header = make_header(self.it, channel_map=ch_map, fbg_map=fbg_map)
+                header = make_header(self.it, channel_map=ch_map, fbg_map=fbg_map,other_params=self.cfg.other_params)
                 pickle.dump(header, f, protocol=pickle.HIGHEST_PROTOCOL)
          
 
@@ -483,7 +486,8 @@ def record_to_file(it: Any,
                    duration_sec: float,
                    channels: Optional[List[int]] = None,        # 1-based
                    FBGs: Optional[List[List[int]]] = None ,# 1-based
-                   write_every_n: int = 1   
+                   write_every_n: int = 1,
+                   params: Optional[Dict] = None
                    ) -> Dict[str, Any]:
     """
     Если заданы channels/FBGs — записывается только это подмножество.
@@ -606,6 +610,11 @@ def read_fbg_stream_raw_lp(filepath: str):
 
         t_perf: List[float] = []
         acc: List[List[List[float]]] = [[[] for _ in range(fbg_counts[ch])] for ch in range(n_ch)]
+        
+        try: 
+            other_params=header['other_params']
+        except:
+            other_params=None
 
         while True:
             len_buf = f.read(4)
@@ -661,7 +670,7 @@ def read_fbg_stream_raw_lp(filepath: str):
         fbgs = list(FBGs_list[i])              # 1-based ids aligned with rows in arr
         channels[int(ch)] = {int(fbg_id): arr[j, :] for j, fbg_id in enumerate(fbgs)}
 
-    return times, channels, channel_list, FBGs_list
+    return times, channels, channel_list, FBGs_list, other_params
     
 
 
@@ -751,6 +760,7 @@ def record_and_plot(it: Any,
                     max_fps: int = 30,
                     ylim: Optional[Tuple[float, float]] = None,
                     title: Optional[str] = None,
+                    other_params: Optional[Dict] = None
                     ) -> Tuple[Callable[[], None], Dict[str, Any]]:
 
     import gc
@@ -811,7 +821,8 @@ def record_and_plot(it: Any,
 
         try:
             with open(filepath, "wb") as f:
-                header = make_header(it, channel_map=ch_map_0, fbg_map=fbg_map_0)
+                header = make_header(it, channel_map=ch_map_0, fbg_map=fbg_map_0,other_params=other_params)
+                
                 pickle.dump(header, f, protocol=pickle.HIGHEST_PROTOCOL)
 
                 batch: List[Tuple[float, float, int, List[List[float]]]] = []

@@ -322,7 +322,7 @@ class MainWindow(ThreadedMainWindow):
         
     def plot_from_file(self):
         if self.file_to_load_path.split('.')[1]=='fbgs':
-            times, channels, channel_list, FBGs_list = read_fbg_stream_raw_lp(self.file_to_load_path)
+            times, channels, channel_list, FBGs_list,other_params = read_fbg_stream_raw_lp(self.file_to_load_path)
             self.logText('In this file there are channels {} and FBGs {} in these channels'.format(channel_list,FBGs_list))
             for ch in self.params.it.channels:
                 for FBGs in self.params.it.FBGs:
@@ -334,7 +334,9 @@ class MainWindow(ThreadedMainWindow):
                         plt.title('ch {} FBG {}'.format(ch,FBG))
                         plt.tight_layout()
                         plt.show()
-                        
+                
+            self.logText('Other parameters of the record are {} '.format(other_params))       
+            
         elif self.file_to_load_path.split('.')[1]=='spectrum':
             with open(self.file_to_load_path,'rb') as f:
                 waves,spectrum=pickle.load(f)
