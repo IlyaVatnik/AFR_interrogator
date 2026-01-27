@@ -137,6 +137,10 @@ class MainWindow(ThreadedMainWindow):
         self.ui.LogField.append("<span style=\" font-size:8pt; font-weight:600; color:#ff0000;\" >"
                              + ">" + text + "</span>")
         
+    def clear_log(self):
+        """Функция, которая вызывается по нажатию кнопки и очищает LogField."""
+        self.ui.LogField.clear()
+        
     def init_interface(self):
         self.ui.pushButton_start_recording.pressed.connect(self.recording)
         self.ui.pushButton_plot_live_dynamics.toggled[bool].connect(self.plot_live_dynamics)
@@ -148,6 +152,7 @@ class MainWindow(ThreadedMainWindow):
         self.ui.pushButton_plot_from_file.clicked.connect(self.plot_from_file)
         self.ui.pushButton_single_measurement.clicked.connect(self.single_measurement)
         self.ui.pushButton_save_single_spectrum.clicked.connect(self.save_single_spectrum)
+        self.ui.pushButton_clearLog.clicked.connect(self.clear_log)
         
         
         
