@@ -66,7 +66,6 @@ class Interrogator:
     FC_DEBUG = 0x03
     FC_READ_ADC_SINGLE = 0x07
     
-    POWER_CALIBRATION_COEFF=48 # dBm, получено из эксперимента
 
     def __init__(self, ip,
                  pc_ip,
@@ -108,6 +107,10 @@ class Interrogator:
         self.ad_step_ghz: Optional[float] = None       # AD шаг сетки (между индексами)
         self.sweep_direction_decreasing: Optional[bool] = None  # True, если свип идёт в сторону убывания частоты
         self.waves=None # массив длин волн, на которых измеряется спектр при текущей конфигурации свипа
+        
+        self.thresholds=np.nan*np.zeros(self.channels)
+        self.gains_auto=False*np.zeros(self.channels)
+        self.gains_manual=0*np.zeros(self.channels)
         
         # При инициализации отправим STOP, чтобы модуль прекратил поток, если он был включён ранее
         self.stop_freq_stream()
@@ -356,7 +359,7 @@ class Interrogator:
         # нумерация канала с первого
         # Команда: 0x20 0x02 0x06  Ch(0-based)  ThrHi ThrLo
         # Порог 0..65535, 65535 обычно трактуется как «auto»
-        
+        self.thresholds[channel-1]=threshold
         if channel < 1 or channel > 16:
             raise ValueError("Channel must be 1..16")
         if not (0 <= threshold <= 65535):
@@ -367,12 +370,18 @@ class Interrogator:
         self._send(payload)
         data = self._recv_datagram(timeout)
         return self._is_success_reply(data, self.ID_CONFIG, self.FC_SET_THRESHOLD)
+    
+
+    def get_log_threshold(self,ch):
+        return 10*np.log10(self.gain_value(self.gains_manual[ch]))+10*np.log10(self.thresholds[ch])
 
     def set_gain(self, channel: int, auto: bool = True, manual_level: int = 0, timeout: float = 1.0) -> bool:
         # Команда: 0x20 0x03 0x06  Ch(0-based)  GainHi GainLo
         # Кодирование (по наблюдениям):
         #   auto=True  → Gain = 0x00LL (MSB=0), LL игнорируется прошивкой
         #   auto=False → Gain = 0x80LL (MSB=1), LL=manual_level (0..5)
+        self.gains_manual[channel-1]=manual_level
+        self.gains_auto[channel-1]=auto
         if channel < 1 or channel > 16:
             raise ValueError("Channel must be 1..16")
         if not (0 <= manual_level <= 5):
@@ -843,7 +852,7 @@ class Interrogator:
         # spectrum = np.frombuffer(payload, dtype='<u2')  # shape: (len(payload)//2,)
         u16 = np.frombuffer(payload, dtype='>u2')  # big-endian без копии
         
-        spectrum =10*self.gain_value(gain) + 10*np.log10(u16) - self.POWER_CALIBRATION_COEFF
+        spectrum =10*np.log10(self.gain_value(gain)) + 10*np.log10(u16)
         
         return ch_no,gain,spectrum
 
@@ -893,7 +902,12 @@ class Interrogator:
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
-    it = Interrogator('10.2.60.38','10.2.60.33')
+    it = Interrogator('10.2.15.150','10.2.15.158')
+    #%%
+    waves=it.get_waves()
+   
+    spectrum=it.get_single_spectrum(1)
+    plt.plot(waves,spectrum)
 #%%
     # Прочитать идентификацию и параметры
     

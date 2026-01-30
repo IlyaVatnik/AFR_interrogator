@@ -220,7 +220,7 @@ class MainWindow(ThreadedMainWindow):
                         for FBG_wave in FBGs[ch-1]:
                             if FBG_wave is not np.nan:
                                 plt.axvline(FBG_wave,  color='red')
-                            
+                    plt.axhline(self.it.get_log_threshold(ch),ls='--',color='red',alpha=0.3)
                     plt.title('Channel {}'.format(ch))
         except Exception as e:
             self.logWarningText(str(e))

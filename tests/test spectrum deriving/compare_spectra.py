@@ -32,7 +32,7 @@ plt.ylabel('Spectral power, dB')
 #%%
 data=np.genfromtxt('spectrum_from_manufacturer_app.txt',skip_header=1)
 gain=0
-waves_manufact,spectrum_manufact=299_792_458.0/data[:,0],10*np.log10(data[:,1])-48+10*gain_value(gain)
+waves_manufact,spectrum_manufact=299_792_458.0/data[:,0] , 10*np.log10(data[:,1])+10*np.log10(gain_value(gain))
 plt.plot(waves_manufact,spectrum_manufact,label='manufacturer')
 
 plt.legend()
