@@ -5,8 +5,8 @@ Created on Wed Jan 21 11:32:18 2026
 @author: Илья
 """
 
-__version__='1.1'
-__date__='2026.01.23'
+__version__='1.2'
+__date__ = '2026.02.02'
 
 import os
     
@@ -220,7 +220,7 @@ class MainWindow(ThreadedMainWindow):
                         for FBG_wave in FBGs[ch-1]:
                             if FBG_wave is not np.nan:
                                 plt.axvline(FBG_wave,  color='red')
-                    plt.axhline(self.it.get_log_threshold(ch),ls='--',color='red',alpha=0.3)
+                    plt.axhline(self.it.get_log_threshold(ch),ls='--',color='gray',alpha=0.3)
                     plt.title('Channel {}'.format(ch))
         except Exception as e:
             self.logWarningText(str(e))

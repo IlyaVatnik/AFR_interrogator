@@ -7,8 +7,8 @@ Created on Fri Oct 17 14:19:23 2025
 
 For the AFR Arcadia Optronix Interrogator
 """
-__version__='1.4'
-__date__='2026.01.23'
+__version__='1.5'
+__date__='2026.02.02'
 
 
 import socket
@@ -373,7 +373,7 @@ class Interrogator:
     
 
     def get_log_threshold(self,ch):
-        return 10*np.log10(self.gain_value(self.gains_manual[ch]))+10*np.log10(self.thresholds[ch])
+        return 10*np.log10(self.gain_value(self.gains_manual[ch-1]))+10*np.log10(self.thresholds[ch-1])
 
     def set_gain(self, channel: int, auto: bool = True, manual_level: int = 0, timeout: float = 1.0) -> bool:
         # Команда: 0x20 0x03 0x06  Ch(0-based)  GainHi GainLo
