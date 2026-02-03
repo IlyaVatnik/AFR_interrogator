@@ -17,8 +17,8 @@ FBGrecorder.py — безопасная безголовая запись пот
 Live-плот: live_plot_wavelengths(it, channel, fbg_indices, ...) — запускайте из главного потока GUI.
 """
 
-__version__='1.2'
-__date__='2026.01.27'
+__version__='1.3'
+__date__='2026.02.03'
 
 
 
@@ -33,6 +33,7 @@ from queue import Queue, Empty, Full
 from typing import Any, Callable, Dict, List, Optional, Tuple,Iterable
 from matplotlib.animation import FuncAnimation
 import gc
+import numpy as np
 
 # Мягкие зависимости
 try:
@@ -747,7 +748,6 @@ class FrameFanout:
 #   - Если есть активный backend (Qt/Tk), используем "GUI timer":
 #       fig.canvas.new_timer(...)
 #   - И как fallback — threading.Timer (может сработать, но GUI-бэкенды иногда ругаются)
-
 def record_and_plot(it: Any,
                     filepath: str,
                     duration_sec: float,
@@ -756,6 +756,11 @@ def record_and_plot(it: Any,
                     write_every_n: int = 1,
                     plot_channel: int = 1,
                     plot_fbg_indices: List[int] = (0, 1, 2),
+                    # --- NEW ---
+                    plot_channels: Optional[List[int]] = None,          # 1-based
+                    plot_FBGs: Optional[List[List[int]]] = None,        # 0-based indices per channel (for plotting)
+                    use_subplots: bool = True,
+                    # -----------
                     window_sec: float = 10.0,
                     max_fps: int = 30,
                     ylim: Optional[Tuple[float, float]] = None,
@@ -821,8 +826,7 @@ def record_and_plot(it: Any,
 
         try:
             with open(filepath, "wb") as f:
-                header = make_header(it, channel_map=ch_map_0, fbg_map=fbg_map_0,other_params=other_params)
-                
+                header = make_header(it, channel_map=ch_map_0, fbg_map=fbg_map_0, other_params=other_params)
                 pickle.dump(header, f, protocol=pickle.HIGHEST_PROTOCOL)
 
                 batch: List[Tuple[float, float, int, List[List[float]]]] = []
@@ -906,63 +910,81 @@ def record_and_plot(it: Any,
     wr_thr.start()
 
     # ---- Live plot ----
-    stop_plot,fig = live_plot_wavelengths(
-        it=it,
-        channel=plot_channel,
-        fbg_indices=list(plot_fbg_indices),
-        window_sec=window_sec,
-        max_fps=max_fps,
-        ylim=ylim,
-        title=title,
-        blocking=False,
-        source_queue=q_plot
-    )
+    # NEW: поддержка нескольких каналов (несколько фигур)
+    if plot_channels is None:
+        plot_channels = [int(plot_channel)]
+    else:
+        plot_channels = [int(c) for c in plot_channels]
 
-    # ---- НОВОЕ: авто-остановка/авто-закрытие по duration_sec ----
+    if plot_FBGs is None:
+        plot_FBGs = [list(plot_fbg_indices) for _ in plot_channels]
+    else:
+        if len(plot_FBGs) != len(plot_channels):
+            raise ValueError("Длина plot_FBGs должна совпадать с длиной plot_channels")
+        plot_FBGs = [list(lst) for lst in plot_FBGs]
+
+    stop_plots: List[Callable[[], None]] = []
+    figs = []
+
+    for k, ch1 in enumerate(plot_channels):
+        ch_fbgs = plot_FBGs[k]
+        stop_plot, fig = live_plot_wavelengths(
+            it=it,
+            channel=ch1,
+            fbg_indices=ch_fbgs,
+            window_sec=window_sec,
+            max_fps=max_fps,
+            ylim=ylim,
+            title=(title or None),
+            blocking=False,
+            source_queue=q_plot,
+            # --- NEW ---
+            use_subplots=use_subplots
+        )
+        stop_plots.append(stop_plot)
+        figs.append(fig)
+
+    # ---- авто-остановка/авто-закрытие ----
     stop_called = threading.Event()
 
     def stop_all():
-        # делаем идемпотентным (можно вызвать несколько раз)
         if stop_called.is_set():
             return
         stop_called.set()
 
-        # 1) остановить writer loop
         stop_event.set()
 
-        # 2) закрыть окно графика (должно быть в GUI-потоке)
-        try:
-            stop_plot()
-        except Exception:
-            pass
+        # закрыть все окна
+        for sp in stop_plots:
+            try:
+                sp()
+            except Exception:
+                pass
 
-        # 3) остановить fanout
         try:
             fan.stop(timeout=1.0)
         except Exception:
             pass
 
-        # 4) дождаться writer
         try:
             wr_thr.join(timeout=2.0)
         except Exception:
             pass
-        
+
         it.stop_freq_stream()
 
-    # Ставим "GUI timer" через matplotlib backend
+    # Таймер: достаточно повеситься на первую фигуру (или fallback, если нет фигур)
     try:
-       
-        timer = fig.canvas.new_timer(interval=int(float(duration_sec) * 1000))
+        fig0 = figs[0]
+        timer = fig0.canvas.new_timer(interval=int(float(duration_sec) * 1000))
         timer.single_shot = True
         timer.add_callback(stop_all)
         timer.start()
-        timer.start()
     except Exception:
-        # fallback: потоковый таймер (может быть менее надёжен на некоторых GUI)
         threading.Timer(duration_sec, stop_all).start()
 
     return stop_all, stats
+
 
 def live_plot_wavelengths(it,
                           channel: int,
@@ -973,17 +995,16 @@ def live_plot_wavelengths(it,
                           title: Optional[str] = None,
                           ylim: Optional[Tuple[float, float]] = None,
                           blocking: bool = False,
-                          source_queue: "Queue[Tuple[float, List[List[float]]]]" = None):
+                          source_queue: "Queue[Tuple[float, List[List[float]]]]" = None,
+                          # --- NEW ---
+                          use_subplots: bool = True):
     """
     нумерация канала - с первого
     Реального времени график длин волн выбранных решёток одного канала.
 
-    Если source_queue передан — функция НЕ создаёт свой RX-поток, а читает кадры из внешней очереди.
-    Элемент очереди: (t_perf: float, wl: List[List[float]]).
-
-    Важно:
-      - Запускать из главного GUI-потока.
-      - Нужен интерактивный backend (Qt5Agg/TkAgg).
+    use_subplots=True:
+      одна фигура на канал, внутри N вертикальных сабплотов (по числу fbg_indices),
+      в каждом сабплоте рисуется только одна решётка.
     """
     import threading
     import queue
@@ -992,21 +1013,21 @@ def live_plot_wavelengths(it,
 
     import matplotlib.pyplot as plt
 
-
     # Валидация индексов
-    
     n_ch = int(getattr(it, "channels", 0) or 0)
     fbg_per_ch = int(getattr(it, "fbg_per_ch", 0) or 0)
-    if n_ch > 0 and not (1 <= channel < n_ch+1):
+    if n_ch > 0 and not (1 <= channel < n_ch + 1):
         raise ValueError(f"Некорректный channel={channel}, допустимо 1..{n_ch}")
-    channel=channel-1 # весь дальнейшей код в этой функции работает с нумерацией каналов 0..n-1
+
+    channel_0 = channel - 1  # внутренне 0-based
     fbg_indices = list(fbg_indices)
+    # привести np.int64/np.int32 -> int, чтобы заголовки/ключи были нормальными
+    fbg_indices = [int(i) for i in list(fbg_indices)]
     if fbg_per_ch > 0:
         for i in fbg_indices:
             if not (0 <= i < fbg_per_ch):
                 raise ValueError(f"Некорректный индекс решётки {i}, допустимо 0..{fbg_per_ch-1}")
 
-    # Локальная очередь, если внешний источник не задан
     own_queue = False
     if source_queue is None:
         q = queue.Queue(maxsize=10000)
@@ -1020,7 +1041,6 @@ def live_plot_wavelengths(it,
     times = deque(maxlen=maxlen)
     series = {i: deque(maxlen=maxlen) for i in fbg_indices}
 
-    # Если нет внешнего источника — запустим свой легкий RX-поток
     def worker():
         while not stop_event.is_set():
             fr = it.pop_freq_frame()
@@ -1028,7 +1048,7 @@ def live_plot_wavelengths(it,
                 time.sleep(0.0005)
                 continue
             wl = fr.get("wavelength_nm")
-            if wl is None or len(wl) <= channel:
+            if wl is None or len(wl) <= channel_0:
                 continue
             t = float(fr.get("t_perf", time.perf_counter()))
             try:
@@ -1049,29 +1069,71 @@ def live_plot_wavelengths(it,
     else:
         rx_thread = None
 
-
     plt.ion()
-    fig, ax = plt.subplots(figsize=(8, 4))
-    title = title or f"Channel {channel} — FBG {fbg_indices}"
-    ax.set_title(title)
-    ax.set_xlabel("Time, s")
-    ax.set_ylabel("FBG wavelength, nm")
 
-    lines = {}
-    colors = plt.cm.tab10.colors
-    for k, i in enumerate(fbg_indices):
-        line, = ax.plot([], [], label=f"FBG {i}", color=colors[k % len(colors)])
-        lines[i] = line
-    ax.legend(loc="best")
+    # --- NEW: создание фигуры/осей ---
+    if use_subplots:
+        n = max(1, len(fbg_indices))
+        fig_h = max(3.0, 1.6 * n)
+        fig, axes = plt.subplots(n, 1, sharex=True, figsize=(9, fig_h))
 
-    if ylim is not None:
-        ax.set_ylim(*ylim)
+        # axes может быть не списком при n=1
+        if not isinstance(axes, (list, tuple)):
+            axes = [axes]
+        axes = list(axes)
+        
+        # Нормализуем axes в плоский список matplotlib.axes.Axes
+        if n == 1:
+            axes_list = [axes]
+        else:
+            axes_list = list(np.ravel(axes))
+
+        main_title = title or f"Channel {channel} — FBGs {fbg_indices}"
+        fig.suptitle(main_title)
+
+        # ОДНА общая подпись осей на всю фигуру
+        fig.supxlabel("Time, s")
+        fig.supylabel("FBG wavelength, nm")
+
+        lines = {}
+        colors = plt.cm.tab10.colors
+
+        for k, fbg in enumerate(fbg_indices):
+            ax = axes_list[k]
+            ax.grid(True, alpha=0.25)
+
+            # не ставим xlabel/ylabel на каждую ось — только общий supxlabel/supylabel
+            # вместо легенды — заголовок сабплота (один на ось)
+            ax.set_title(f"FBG {fbg}", loc="left", fontsize=10, pad=2)
+
+            line, = ax.plot([], [], color=colors[k % len(colors)])
+            if ylim is not None:
+                ax.set_ylim(*ylim)
+            lines[fbg] = (line, ax)
+
+        # чуть поправим компоновку, чтобы подписи не налезали
+        fig.tight_layout(rect=(0.06, 0.06, 1.0, 0.95))
+
+    else:
+        fig, ax = plt.subplots(figsize=(8, 4))
+        main_title = title or f"Channel {channel} — FBG {fbg_indices}"
+        ax.set_title(main_title)
+        ax.set_xlabel("Time, s")
+        ax.set_ylabel("FBG wavelength, nm")
+
+        lines = {}
+        colors = plt.cm.tab10.colors
+        for k, i in enumerate(fbg_indices):
+            line, = ax.plot([], [], label=f"FBG {i}", color=colors[k % len(colors)])
+            lines[i] = line
+        ax.legend(loc="best")
+        if ylim is not None:
+            ax.set_ylim(*ylim)
 
     t0 = None
 
     def update(_frame_idx):
         nonlocal t0
-        # забирать всё накопившееся
         while True:
             try:
                 t, wl = q.get_nowait()
@@ -1081,7 +1143,7 @@ def live_plot_wavelengths(it,
                 t0 = t
             times.append(t)
 
-            row_ch = wl[channel] if isinstance(wl, (list, tuple)) and len(wl) > channel else []
+            row_ch = wl[channel_0] if isinstance(wl, (list, tuple)) and len(wl) > channel_0 else []
             for i in fbg_indices:
                 val = float("nan")
                 if isinstance(row_ch, (list, tuple)) and len(row_ch) > i:
@@ -1089,6 +1151,9 @@ def live_plot_wavelengths(it,
                 series[i].append(val)
 
         if t0 is None or len(times) == 0:
+            # вернуть художников
+            if use_subplots:
+                return [lines[i][0] for i in fbg_indices]
             return list(lines.values())
 
         import numpy as np
@@ -1097,32 +1162,58 @@ def live_plot_wavelengths(it,
         t_now = t_rel[-1]
         mask = t_rel >= max(0.0, t_now - window_sec)
 
-        for i, line in lines.items():
-            y = np.asarray(series[i], dtype=float)
-            if y.size != t_rel.size:
-                m = min(len(y), len(t_rel))
-                x_plot = t_rel[-m:]
-                y_plot = y[-m:]
-                if window_sec > 0:
-                    mask_m = x_plot >= max(0.0, x_plot[-1] - window_sec)
-                    x_plot = x_plot[mask_m]
-                    y_plot = y_plot[mask_m]
-            else:
-                x_plot = t_rel[mask]
-                y_plot = y[mask]
-            line.set_data(x_plot, y_plot)
+        if use_subplots:
+            for i in fbg_indices:
+                y = np.asarray(series[i], dtype=float)
+                line, ax_i = lines[i]
 
-        ax.set_xlim(max(0.0, t_now - window_sec), max(window_sec, t_now))
-        if ylim is None:
-            ax.relim()
-            ax.autoscale_view(scalex=False, scaley=True)
+                if y.size != t_rel.size:
+                    m = min(len(y), len(t_rel))
+                    x_plot = t_rel[-m:]
+                    y_plot = y[-m:]
+                    if window_sec > 0:
+                        mask_m = x_plot >= max(0.0, x_plot[-1] - window_sec)
+                        x_plot = x_plot[mask_m]
+                        y_plot = y_plot[mask_m]
+                else:
+                    x_plot = t_rel[mask]
+                    y_plot = y[mask]
 
-        return list(lines.values())
+                line.set_data(x_plot, y_plot)
+                ax_i.set_xlim(max(0.0, t_now - window_sec), max(window_sec, t_now))
+                if ylim is None:
+                    ax_i.relim()
+                    ax_i.autoscale_view(scalex=False, scaley=True)
+
+            return [lines[i][0] for i in fbg_indices]
+
+        else:
+            for i, line in lines.items():
+                y = np.asarray(series[i], dtype=float)
+                if y.size != t_rel.size:
+                    m = min(len(y), len(t_rel))
+                    x_plot = t_rel[-m:]
+                    y_plot = y[-m:]
+                    if window_sec > 0:
+                        mask_m = x_plot >= max(0.0, x_plot[-1] - window_sec)
+                        x_plot = x_plot[mask_m]
+                        y_plot = y_plot[mask_m]
+                else:
+                    x_plot = t_rel[mask]
+                    y_plot = y[mask]
+                line.set_data(x_plot, y_plot)
+
+            ax.set_xlim(max(0.0, t_now - window_sec), max(window_sec, t_now))
+            if ylim is None:
+                ax.relim()
+                ax.autoscale_view(scalex=False, scaley=True)
+
+            return list(lines.values())
 
     interval_ms = max(1, int(1000 / max_fps))
     ani = FuncAnimation(fig, update, interval=interval_ms, blit=False,
                         cache_frame_data=False, save_count=1000)
-    fig._live_anim_ref = ani  # сильная ссылка
+    fig._live_anim_ref = ani
 
     def _on_close(event=None):
         stop_event.set()
@@ -1135,7 +1226,6 @@ def live_plot_wavelengths(it,
     cid = fig.canvas.mpl_connect("close_event", _on_close)
 
     def stop():
-        # ВАЖНО: сначала остановить источник событий анимации
         try:
             ani.event_source.stop()
         except Exception:

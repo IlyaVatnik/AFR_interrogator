@@ -5,8 +5,8 @@ Created on Wed Jan 21 11:32:18 2026
 @author: Илья
 """
 
-__version__='1.2'
-__date__ = '2026.02.02'
+__version__='1.2.2'
+__date__ = '2026.02.03'
 
 import os
     
@@ -246,7 +246,11 @@ class MainWindow(ThreadedMainWindow):
             self.it.start_freq_stream()
             self.live_plots=[]
             for ch in self.params.it.channels:
-                self.live_plots.append(live_plot_wavelengths(self.it, channel=ch, fbg_indices=np.array(self.params.it.FBGs[ch-1])-1, window_sec=10.0, max_fps=100))
+                self.live_plots.append(live_plot_wavelengths(self.it, 
+                                                             channel=ch, 
+                                                             fbg_indices=np.array(self.params.it.FBGs[ch-1])-1, 
+                                                             window_sec=10.0,
+                                                             max_fps=30))
             # self.add_thread(self.stop_live())
         else:
             # self.kill_threads(self.stop_live)
@@ -327,18 +331,20 @@ class MainWindow(ThreadedMainWindow):
         
     def plot_from_file(self):
         if self.file_to_load_path.split('.')[1]=='fbgs':
+            colors = plt.cm.tab10.colors
             times, channels, channel_list, FBGs_list,other_params = read_fbg_stream_raw_lp(self.file_to_load_path)
             self.logText('In this file there are channels {} and FBGs {} in these channels'.format(channel_list,FBGs_list))
             for ch in self.params.it.channels:
-                for FBGs in self.params.it.FBGs:
-                    for FBG in FBGs:
-                        plt.figure()
-                        plt.plot(times - times[0], channels[ch][FBG])
-                        plt.xlabel('Time, s')
-                        plt.ylabel('FBG wavelength, nm')
-                        plt.title('ch {} FBG {}'.format(ch,FBG))
-                        plt.tight_layout()
-                        plt.show()
+                N_FBG=len(self.params.it.FBGs[ch-1])
+                fig,axes=plt.subplots(nrows=N_FBG)
+                fig.supxlabel("Time, s")
+                fig.supylabel("FBG wavelength, nm")
+                for ii,FBG in enumerate(self.params.it.FBGs[ch-1]):
+                    axes[ii].plot(times - times[0], channels[ch][ii+1],color=colors[ii % len(colors)])
+                    axes[ii].set_title(f"FBG {FBG}", loc="left", fontsize=10, pad=2)
+                plt.suptitle('ch {}'.format(ch))
+                plt.tight_layout()
+                plt.show()
                 
             self.logText('Other parameters of the record are {} '.format(other_params))       
             
