@@ -147,7 +147,7 @@
     <item>
      <widget class="QLabel" name="label_30">
       <property name="text">
-       <string>Gain auto</string>
+       <string>Gain auto, boolean</string>
       </property>
      </widget>
     </item>
@@ -164,7 +164,7 @@
     <item>
      <widget class="QLabel" name="label_29">
       <property name="text">
-       <string>Gain manual</string>
+       <string>Gain manual, 0..5</string>
       </property>
      </widget>
     </item>
@@ -181,7 +181,7 @@
     <item>
      <widget class="QLabel" name="label_31">
       <property name="text">
-       <string>Thresholds</string>
+       <string>Thresholds, arb.un.</string>
       </property>
      </widget>
     </item>
@@ -213,14 +213,14 @@
     <item>
      <widget class="QLabel" name="label_32">
       <property name="text">
-       <string>Single meas. averaging factor</string>
+       <string>Single meas. averaging time, s</string>
       </property>
      </widget>
     </item>
     <item>
-     <widget class="QLineEdit" name="lineEdit_">
+     <widget class="QLineEdit" name="lineEdit_averaging_time_for_single_FBG_measurement">
       <property name="text">
-       <string>5</string>
+       <string>0.5</string>
       </property>
       <property name="alignment">
        <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>

@@ -5,8 +5,8 @@ Created on Wed Jan 21 11:32:18 2026
 @author: Илья
 """
 
-__version__='1.2.2'
-__date__ = '2026.02.03'
+__version__='1.2.3'
+__date__ = '2026.02.04'
 
 import os
     
@@ -18,7 +18,7 @@ import pickle
 
 from PyQt5.QtCore import  QThread,QTimer
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QDialog,QLineEdit,QComboBox,QCheckBox,QMessageBox
-
+import time
 
 
 
@@ -39,7 +39,7 @@ class Params_it():
         self.gains_auto=[0,0,0,0]
         self.gains_manual=[1,1,1,1]
         self.thresholds=[3000,3000,3000,3000]
-        self.number_of_average_for_single_FBG_measurement=5
+        self.averaging_time_for_single_FBG_measurement=0.5
         
 class Params_recording():
     def __init__(self):      
@@ -200,12 +200,13 @@ class MainWindow(ThreadedMainWindow):
     def single_measurement(self):
         try:
             FBGs_list=[]
-            for i in range(self.params.it.number_of_average_for_single_FBG_measurement):
+            time0=time.time()
+            while time.time()-time0<self.params.it.averaging_time_for_single_FBG_measurement:
                 FBGs_list.append(self.it.get_single_FBG_measurement())
             FBGs=average_FBG_measurements(FBGs_list)
             for ch in self.params.it.channels:
                 if FBGs[ch-1] is not None:
-                    self.logText( f'channel{ch}:  '+(", ".join(f"{x:.4f}" for x in FBGs[ch-1]))+ ' nm')
+                    self.logText( f'channel{ch}:  '+(", ".join(f"{x:.3f}" for x in FBGs[ch-1]))+ ' nm')
             
             if self.ui.checkBox_plot_single_spectrum.isChecked():
                 waves=self.it.get_waves()

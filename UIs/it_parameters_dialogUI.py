@@ -95,10 +95,10 @@ class Ui_Dialog(object):
         self.label_32 = QtWidgets.QLabel(self.groupBox_4)
         self.label_32.setObjectName("label_32")
         self.verticalLayout_5.addWidget(self.label_32)
-        self.lineEdit_ = QtWidgets.QLineEdit(self.groupBox_4)
-        self.lineEdit_.setAlignment(QtCore.Qt.AlignRight|QtCore.Qt.AlignTrailing|QtCore.Qt.AlignVCenter)
-        self.lineEdit_.setObjectName("lineEdit_")
-        self.verticalLayout_5.addWidget(self.lineEdit_)
+        self.lineEdit_averaging_time_for_single_FBG_measurement = QtWidgets.QLineEdit(self.groupBox_4)
+        self.lineEdit_averaging_time_for_single_FBG_measurement.setAlignment(QtCore.Qt.AlignRight|QtCore.Qt.AlignTrailing|QtCore.Qt.AlignVCenter)
+        self.lineEdit_averaging_time_for_single_FBG_measurement.setObjectName("lineEdit_averaging_time_for_single_FBG_measurement")
+        self.verticalLayout_5.addWidget(self.lineEdit_averaging_time_for_single_FBG_measurement)
 
         self.retranslateUi(Dialog)
         self.buttonBox.accepted.connect(Dialog.accept) # type: ignore
@@ -119,15 +119,15 @@ class Ui_Dialog(object):
         self.label_28.setText(_translate("Dialog", "FBGs"))
         self.lineEdit_FBGs.setText(_translate("Dialog", "[[1,2,3]]"))
         self.groupBox_3.setTitle(_translate("Dialog", "Gain options"))
-        self.label_30.setText(_translate("Dialog", "Gain auto"))
+        self.label_30.setText(_translate("Dialog", "Gain auto, boolean"))
         self.lineEdit_gains_auto.setText(_translate("Dialog", "[0,0,0,0]"))
-        self.label_29.setText(_translate("Dialog", "Gain manual"))
+        self.label_29.setText(_translate("Dialog", "Gain manual, 0..5"))
         self.lineEdit_gains_manual.setText(_translate("Dialog", "[1,0,0,0]"))
-        self.label_31.setText(_translate("Dialog", "Thresholds"))
+        self.label_31.setText(_translate("Dialog", "Thresholds, arb.un."))
         self.lineEdit_thresholds.setText(_translate("Dialog", "[3000,2000,2000,1000]"))
         self.groupBox_4.setTitle(_translate("Dialog", "Measurement options"))
-        self.label_32.setText(_translate("Dialog", "Single meas. averaging factor"))
-        self.lineEdit_.setText(_translate("Dialog", "5"))
+        self.label_32.setText(_translate("Dialog", "Single meas. averaging time, s"))
+        self.lineEdit_averaging_time_for_single_FBG_measurement.setText(_translate("Dialog", "0.5"))
 
 
 if __name__ == "__main__":
