@@ -17,8 +17,8 @@ FBGrecorder.py — безопасная безголовая запись пот
 Live-плот: live_plot_wavelengths(it, channel, fbg_indices, ...) — запускайте из главного потока GUI.
 """
 
-__version__='1.3'
-__date__='2026.02.03'
+__version__='1.4'
+__date__='2026.02.04'
 
 
 
@@ -559,26 +559,35 @@ def record_to_file(it: Any,
     rec.stop()
     return rec.stats()
 
-# ==========================
-# Чтение записанного файла
-# ==========================
-def read_fbg_stream_raw_lp(filepath: str):
-    """
-    Возвращает:
-      - times: np.ndarray [n_samples], секунд от первого кадра
-      - channel_FBGs: List[np.ndarray], длиной n_selected_ch;
-        каждый элемент — np.ndarray формы [n_selected_fbg(ch), n_samples].
-      - channel_list: List[int] (1-based каналы, записанные в файл)
-      - FBGs_list: List[List[int]] (1-based решётки по каждому записанному каналу)
 
-    Поддерживает файлы:
-      - version 4: равное кол-во FBG на канал (header["fbg_per_ch"])
-      - version 5/6: выбор каналов/FBG (header["channel_map"], header["fbg_map"])
-        version 6: дополнительно содержит channel_list/FBGs_list (1-based)
+def read_fbg_stream_raw_lp(filepath: str, debug: bool = False):
+    """
+    ПАТЧ:
+      - читает до последнего корректного блока
+      - при повреждённом/оборванном хвосте возвращает уже накопленные данные
+      - если header повреждён/не дочитан -> выбрасывает понятное исключение
+      - добавлен простой resync, если длина блока мусорная
     """
     import numpy as np
+    import pickle
+    import struct
+    from typing import List, Dict
+
+    MAX_BLOCK_LEN = 1 << 30  # 1GB
+    RESYNC_WINDOW = 1024     # сколько байт максимум пытаемся сдвигаться при мусорной длине
+
+    def _dbg(*a):
+        if debug:
+            print("[read_fbg_stream_raw_lp]", *a)
+
     with open(filepath, "rb") as f:
-        header = pickle.load(f)
+        # --- header ---
+        try:
+            header = pickle.load(f)
+        except Exception as e:
+            # Если header не дописан, извлечь данные корректно невозможно (неизвестны maps/геометрия)
+            raise RuntimeError(f"Не удалось прочитать header (возможно файл оборван в заголовке): {e}") from e
+
         version = int(header.get("version", 4))
 
         # --- определяем карты выбора (0-based) ---
@@ -588,91 +597,98 @@ def read_fbg_stream_raw_lp(filepath: str):
             n_ch = len(channel_map)
             fbg_counts = [len(row) for row in fbg_map]
 
-            # --- 1-based списки, которые нужно вернуть ---
             if ("channel_list" in header) and ("FBGs_list" in header):
                 channel_list = list(map(int, header["channel_list"]))
                 FBGs_list = [list(map(int, row)) for row in header["FBGs_list"]]
             else:
-                # fallback для version=5: восстановим 1-based из 0-based
                 channel_list = [c + 1 for c in channel_map]
                 FBGs_list = [[i + 1 for i in row] for row in fbg_map]
-
         else:
-            # version 4 (или любой старый без карт)
             channel_map = None
             fbg_map = None
             n_ch = int(header["channels"])
             fbg_per_ch = int(header["fbg_per_ch"])
             fbg_counts = [fbg_per_ch] * n_ch
-
-            # для старых файлов считаем, что записаны все
             channel_list = list(range(1, n_ch + 1))
             FBGs_list = [list(range(1, fbg_per_ch + 1)) for _ in range(n_ch)]
 
+        other_params = header.get("other_params", None)
+
         t_perf: List[float] = []
         acc: List[List[List[float]]] = [[[] for _ in range(fbg_counts[ch])] for ch in range(n_ch)]
-        
-        try: 
-            other_params=header['other_params']
-        except:
-            other_params=None
 
+        def _append_record(ts_p, wl):
+            t_perf.append(float(ts_p))
+
+            if not isinstance(wl, (list, tuple)):
+                wl2 = []
+            else:
+                wl2 = list(wl)
+            if len(wl2) != n_ch:
+                wl2 = (wl2 + [[]] * n_ch)[:n_ch]
+
+            for ch in range(n_ch):
+                row = wl2[ch]
+                need = fbg_counts[ch]
+                cur = []
+                if isinstance(row, (list, tuple)):
+                    for x in row[:need]:
+                        try:
+                            cur.append(float(x))
+                        except Exception:
+                            cur.append(float("nan"))
+                if len(cur) < need:
+                    cur += [float("nan")] * (need - len(cur))
+                for i in range(need):
+                    acc[ch][i].append(cur[i])
+
+        # --- основной цикл чтения блоков ---
         while True:
             len_buf = f.read(4)
-            if not len_buf or len(len_buf) < 4:
-                break
-            (block_len,) = struct.unpack(">I", len_buf)
+            if not len_buf:
+                break  # нормальный EOF
+            if len(len_buf) < 4:
+                break  # оборванная длина в конце
+
+            try:
+                (block_len,) = struct.unpack(">I", len_buf)
+            except Exception:
+                break  # мусор/обрыв
+
             if block_len <= 0 or block_len > (1 << 30):
-                break
+                break  # мусорная длина => дальше читать нельзя
+
             blob = f.read(block_len)
             if len(blob) < block_len:
-                break
+                break  # оборванный блок в конце
 
             try:
                 batch = pickle.loads(blob)
             except Exception:
-                break
+                break  # оборванный/битый pickle в конце
 
             for rec in batch:
-                if not (isinstance(rec, tuple) and len(rec) == 4):
-                    continue
-                ts_p, ts_u, pkt_ctr, wl = rec
-                t_perf.append(float(ts_p))
+                if isinstance(rec, tuple) and len(rec) == 4:
+                    ts_p, ts_u, pkt_ctr, wl = rec
+                    _append_record(ts_p, wl)
 
-                if not isinstance(wl, (list, tuple)):
-                    wl = []
-                if len(wl) != n_ch:
-                    wl = (list(wl) + [[]] * n_ch)[:n_ch]
-
-                for ch in range(n_ch):
-                    row = wl[ch]
-                    need = fbg_counts[ch]
-                    cur = []
-                    if isinstance(row, (list, tuple)):
-                        cur = [float(x) for x in row[:need]]
-                    if len(cur) < need:
-                        cur = cur + [float("nan")] * (need - len(cur))
-                    for i in range(need):
-                        acc[ch][i].append(cur[i])
-
+    # --- финализация ---
     t_perf_arr = np.asarray(t_perf, dtype=float)
     if t_perf_arr.size == 0:
-        # channels: {ch(1-based): {fbg(1-based): np.ndarray[n_samples]}}
-        return t_perf_arr, {}, channel_list, FBGs_list   
+        # Здесь теперь "пусто" будет только если реально не было ни одного корректного блока
+        return t_perf_arr, {}, channel_list, FBGs_list, other_params
 
     t0 = t_perf_arr[0]
     times = t_perf_arr - t0
+
     channel_FBGs = [np.asarray(acc[ch], dtype=float) for ch in range(len(acc))]
-    # Собираем удобную структуру без классов:
-    # channels[ch][fbg] -> np.ndarray [n_samples], где ch и fbg — 1-based.
     channels: Dict[int, Dict[int, np.ndarray]] = {}
-    for i, ch in enumerate(channel_list):      # channel_list 1-based
-        arr = channel_FBGs[i]                  # shape: [n_fbg, n_samples]
-        fbgs = list(FBGs_list[i])              # 1-based ids aligned with rows in arr
+    for i, ch in enumerate(channel_list):
+        arr = channel_FBGs[i]
+        fbgs = list(FBGs_list[i])
         channels[int(ch)] = {int(fbg_id): arr[j, :] for j, fbg_id in enumerate(fbgs)}
 
     return times, channels, channel_list, FBGs_list, other_params
-    
 
 
 class FrameFanout:
@@ -1291,6 +1307,269 @@ def safe_stop_interrogator(it: Any, join_timeout: float = 2.0) -> None:
         pass
 
 
+def record_long_dynamics(it,
+                         filepath: str,
+                         duration_sec: float,
+                         time_step: float = 1.0,
+                         channels: Optional[List[int]] = None,        # 1-based (optional)
+                         FBGs: Optional[List[List[int]]] = None,      # 1-based (optional)
+                         batch_size: int = 1,
+                         other_params: Optional[Dict] = None,
+                         timeout_single: float = 0.2,
+                         init_timeout_sec: float = 10.0,
+                         append: bool = False) -> Dict[str, Any]:
+    """
+    Долгая запись редких измерений через it.get_single_FBG_measurement() в файл формата
+    record_to_file/read_fbg_stream_raw_lp, причём header содержит только непустые каналы/решётки.
+
+    ВАЖНОЕ ИЗМЕНЕНИЕ ПО ПРОСЬБЕ:
+      - файл открывается и закрывается на КАЖДУЮ запись блока (batch),
+        чтобы можно было читать/копировать файл во время работы.
+      - это заметно медленнее, но при time_step~1с обычно нормально.
+
+    append=False:
+      создаёт новый файл и пишет header.
+    append=True:
+      дописывает в существующий файл (header не пишется).
+      (При append предполагается, что header уже совместим с текущей геометрией.)
+    """
+    import os
+    import time
+    import struct
+    import pickle
+    import math
+
+    if time_step <= 0:
+        raise ValueError("time_step должен быть > 0")
+    if duration_sec <= 0:
+        raise ValueError("duration_sec должен быть > 0")
+    if batch_size <= 0:
+        raise ValueError("batch_size должен быть > 0")
+
+    orig_channels = int(getattr(it, "channels", 0) or 0)
+    orig_fbg = int(getattr(it, "fbg_per_ch", 0) or 0)
+    if orig_channels <= 0 or orig_fbg <= 0:
+        raise RuntimeError("Неизвестны it.channels/it.fbg_per_ch (нужно прочитать параметры модуля)")
+
+    # ----------------------------
+    # 1) Пользовательский выбор (как в record_to_file)
+    # ----------------------------
+    ch_map_0: Optional[List[int]] = None
+    fbg_map_0: Optional[List[List[int]]] = None
+
+    if channels is not None:
+        if not isinstance(channels, (list, tuple)) or len(channels) == 0:
+            raise ValueError("channels должен быть непустым списком (1-based)")
+        ch_map_0 = [int(ch) - 1 for ch in channels]
+        for c0 in ch_map_0:
+            if not (0 <= c0 < orig_channels):
+                raise ValueError(f"Некорректный канал {c0 + 1}, допустимо 1..{orig_channels}")
+
+        if FBGs is not None:
+            if len(FBGs) != len(ch_map_0):
+                raise ValueError("Длина FBGs должна совпадать с длиной channels")
+            fbg_map_0 = []
+            for lst in FBGs:
+                if not isinstance(lst, (list, tuple)) or len(lst) == 0:
+                    raise ValueError("Каждый элемент FBGs должен быть непустым списком (1-based)")
+                row0 = [int(i) - 1 for i in lst]
+                for i0 in row0:
+                    if not (0 <= i0 < orig_fbg):
+                        raise ValueError(f"Некорректный FBG индекс {i0 + 1}, допустимо 1..{orig_fbg}")
+                fbg_map_0.append(row0)
+        else:
+            fbg_map_0 = None
+
+    def _is_valid_float(x) -> bool:
+        try:
+            xf = float(x)
+            return not math.isnan(xf)
+        except Exception:
+            return False
+
+    def _row_to_float_list(row) -> List[float]:
+        if not isinstance(row, (list, tuple)):
+            try:
+                row = list(row)
+            except Exception:
+                return []
+        out = []
+        for x in row:
+            try:
+                out.append(float(x))
+            except Exception:
+                out.append(float("nan"))
+        return out
+
+    def _select_from_meas(meas, ch_map0, fbg_map0) -> List[List[float]]:
+        """
+        Применяет выбор каналов/FBG по индексам.
+        Если maps None -> возвращает meas как есть (но приведённый к float-спискам).
+        """
+        if not isinstance(meas, (list, tuple)):
+            meas = []
+        meas = [_row_to_float_list(r) for r in meas]
+
+        if ch_map0 is None:
+            return meas
+
+        wl_rows: List[List[float]] = []
+        for idx, ch0 in enumerate(ch_map0):
+            src = meas[ch0] if 0 <= ch0 < len(meas) else []
+            if fbg_map0 is not None and idx < len(fbg_map0):
+                sel = fbg_map0[idx]
+                wl_rows.append([src[i] if 0 <= i < len(src) else float("nan") for i in sel])
+            else:
+                wl_rows.append(list(src))
+        return wl_rows
+
+    # ----------------------------
+    # 2) Если выбор не задан — определяем непустые каналы/FBG по первому измерению
+    # ----------------------------
+    if ch_map_0 is None and not append:
+        # В режиме append лучше НЕ пытаться переопределять геометрию:
+        # предполагаем, что файл/заголовок уже есть.
+        t_init0 = time.perf_counter()
+        meas0 = None
+        while (time.perf_counter() - t_init0) < float(init_timeout_sec):
+            try:
+                m = it.get_single_FBG_measurement(timeout=timeout_single)
+                if isinstance(m, (list, tuple)) and len(m) > 0:
+                    meas0 = [_row_to_float_list(r) for r in m]
+                    break
+            except Exception:
+                time.sleep(0.05)
+
+        if meas0 is None:
+            raise RuntimeError("Не удалось получить initial single measurement для определения непустых каналов/FBG")
+
+        ch_map_0 = []
+        fbg_map_0 = []
+        for ch0 in range(min(orig_channels, len(meas0))):
+            row = meas0[ch0]
+            idxs = [i for i, x in enumerate(row) if _is_valid_float(x)]
+            if len(idxs) == 0:
+                continue
+            ch_map_0.append(ch0)
+            fbg_map_0.append(idxs)
+
+        if len(ch_map_0) == 0:
+            raise RuntimeError("В initial measurement нет ни одного непустого канала/решётки (все NaN/пусто)")
+
+    # ----------------------------
+    # 3) Header + "форма" кадра
+    # ----------------------------
+    if append:
+        # append-mode: не пишем header, но форма нужна.
+        # В идеале её нужно читать из файла, но ваш reader ожидает header в начале.
+        # Поэтому здесь требуем, чтобы channels/FBGs были заданы явно.
+        if ch_map_0 is None:
+            raise ValueError("append=True требует явного задания channels (и желательно FBGs), чтобы сохранить геометрию")
+    else:
+        header = make_header(it, channel_map=ch_map_0, fbg_map=fbg_map_0, other_params=other_params)
+
+        # Создаём/пересоздаём файл и пишем header (открыли-закрыли сразу)
+        with open(filepath, "wb") as f:
+            pickle.dump(header, f, protocol=pickle.HIGHEST_PROTOCOL)
+            f.flush()
+            os.fsync(f.fileno())
+
+    if fbg_map_0 is None:
+        fbg_counts = [orig_fbg] * len(ch_map_0)
+    else:
+        fbg_counts = [len(r) for r in fbg_map_0]
+
+    def _shape_to_header(wl_rows: List[List[float]]) -> List[List[float]]:
+        out: List[List[float]] = []
+        n_ch = len(ch_map_0 or [])
+        wl_rows = list(wl_rows) if isinstance(wl_rows, (list, tuple)) else []
+        if len(wl_rows) != n_ch:
+            wl_rows = (wl_rows + [[]] * n_ch)[:n_ch]
+
+        for ch in range(n_ch):
+            row = wl_rows[ch]
+            need = fbg_counts[ch]
+            cur = []
+            if isinstance(row, (list, tuple)):
+                cur = [float(x) for x in row[:need]]
+            if len(cur) < need:
+                cur = cur + [float("nan")] * (need - len(cur))
+            out.append(cur)
+        return out
+
+    # ----------------------------
+    # 4) Основной цикл: накапливаем batch и дописываем его в файл,
+    #    открывая/закрывая файл на КАЖДЫЙ блок.
+    # ----------------------------
+    st = {
+        "filepath": filepath,
+        "duration_sec": float(duration_sec),
+        "time_step": float(time_step),
+        "wr_frames": 0,
+        "blocks_written": 0,
+        "errors": 0,
+        "append": bool(append),
+    }
+
+    t0_perf = time.perf_counter()
+    t_end = t0_perf + float(duration_sec)
+    next_tick = t0_perf
+
+    batch: List[Tuple[float, float, int, List[List[float]]]] = []
+    blocks_written = 0
+
+    def _append_batch_to_file(batch_to_write):
+        nonlocal blocks_written
+        if not batch_to_write:
+            return
+        blob = pickle.dumps(batch_to_write, protocol=pickle.HIGHEST_PROTOCOL)
+        payload = struct.pack(">I", len(blob)) + blob
+
+        with open(filepath, "ab") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+
+        blocks_written += 1
+        st["blocks_written"] = blocks_written
+
+    while True:
+        now = time.perf_counter()
+        if now >= t_end:
+            break
+
+        if now < next_tick:
+            time.sleep(min(0.2, next_tick - now))
+            continue
+
+        k = math.floor((now - t0_perf) / time_step) + 1
+        next_tick = t0_perf + k * time_step
+
+        try:
+            meas = it.get_single_FBG_measurement(timeout=timeout_single)
+            wl_sel = _select_from_meas(meas, ch_map_0, fbg_map_0)
+            wl_sel = _shape_to_header(wl_sel)
+
+            ts_perf = time.perf_counter()
+            ts_unix = time.time()
+            pkt_ctr = -1
+            print('{:.2f} s '.format(ts_perf-t0_perf))
+            batch.append((float(ts_perf), float(ts_unix), int(pkt_ctr), wl_sel))
+            st["wr_frames"] += 1
+
+        except Exception:
+            st["errors"] += 1
+            continue
+
+        if len(batch) >= batch_size:
+            _append_batch_to_file(batch)
+            batch.clear()
+
+    if batch:
+        _append_batch_to_file(batch)
+        batch.clear()
+
+    return st
 
 # ==========================
 # Пример использования (комментарии)

@@ -3,7 +3,7 @@ from UIs.MainWindow import MainWindow
 from PyQt5 import QtWidgets
 from packaging import version
 import sys
-__version__ = '1.4.3'
+__version__ = '1.4.4'
 __date__ = '2026.02.04'
 
 

@@ -331,7 +331,8 @@ class MainWindow(ThreadedMainWindow):
  
         
     def plot_from_file(self):
-        if self.file_to_load_path.split('.')[1]=='fbgs':
+        file_name=os.path.basename(self.file_to_load_path)
+        if file_name.split('.')[1]=='fbgs':
             colors = plt.cm.tab10.colors
             times, channels, channel_list, FBGs_list,other_params = read_fbg_stream_raw_lp(self.file_to_load_path)
             self.logText('In this file there are channels {} and FBGs {} in these channels'.format(channel_list,FBGs_list))
@@ -349,7 +350,7 @@ class MainWindow(ThreadedMainWindow):
                 
             self.logText('Other parameters of the record are {} '.format(other_params))       
             
-        elif self.file_to_load_path.split('.')[1]=='spectrum':
+        elif file_name.split('.')[1]=='spectrum':
             with open(self.file_to_load_path,'rb') as f:
                 waves,spectrum=pickle.load(f)
             plt.figure()
