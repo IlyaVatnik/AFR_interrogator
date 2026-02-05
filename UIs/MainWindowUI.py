@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Form implementation generated from reading ui file 'MainWindow.ui'
+# Form implementation generated from reading ui file 'mainwindow.ui'
 #
 # Created by: PyQt5 UI code generator 5.15.11
 #
@@ -21,7 +21,7 @@ class Ui_MainWindow(object):
         self.toolBoxfdsfs.setGeometry(QtCore.QRect(10, 10, 821, 321))
         self.toolBoxfdsfs.setObjectName("toolBoxfdsfs")
         self.page = QtWidgets.QWidget()
-        self.page.setGeometry(QtCore.QRect(0, 0, 821, 213))
+        self.page.setGeometry(QtCore.QRect(0, 0, 821, 197))
         self.page.setObjectName("page")
         self.pushButton_connect = QtWidgets.QPushButton(self.page)
         self.pushButton_connect.setGeometry(QtCore.QRect(10, 20, 141, 23))
@@ -37,7 +37,7 @@ class Ui_MainWindow(object):
         self.label_folder_to_save.setObjectName("label_folder_to_save")
         self.toolBoxfdsfs.addItem(self.page, "")
         self.page_2 = QtWidgets.QWidget()
-        self.page_2.setGeometry(QtCore.QRect(0, 0, 821, 213))
+        self.page_2.setGeometry(QtCore.QRect(0, 0, 100, 30))
         self.page_2.setObjectName("page_2")
         self.pushButton_single_measurement = QtWidgets.QPushButton(self.page_2)
         self.pushButton_single_measurement.setGeometry(QtCore.QRect(10, 10, 131, 23))
@@ -60,20 +60,20 @@ class Ui_MainWindow(object):
         self.checkBox_plot_single_spectrum.setObjectName("checkBox_plot_single_spectrum")
         self.toolBoxfdsfs.addItem(self.page_2, "")
         self.recording = QtWidgets.QWidget()
-        self.recording.setGeometry(QtCore.QRect(0, 0, 821, 213))
+        self.recording.setGeometry(QtCore.QRect(0, 0, 821, 197))
         self.recording.setObjectName("recording")
         self.pushButton_start_recording = QtWidgets.QPushButton(self.recording)
         self.pushButton_start_recording.setGeometry(QtCore.QRect(10, 60, 221, 23))
         self.pushButton_start_recording.setObjectName("pushButton_start_recording")
         self.lineEdit_file_name = QtWidgets.QLineEdit(self.recording)
-        self.lineEdit_file_name.setGeometry(QtCore.QRect(440, 64, 51, 20))
+        self.lineEdit_file_name.setGeometry(QtCore.QRect(370, 64, 181, 20))
         self.lineEdit_file_name.setAlignment(QtCore.Qt.AlignRight|QtCore.Qt.AlignTrailing|QtCore.Qt.AlignVCenter)
         self.lineEdit_file_name.setObjectName("lineEdit_file_name")
         self.label_folder_to_save_2 = QtWidgets.QLabel(self.recording)
-        self.label_folder_to_save_2.setGeometry(QtCore.QRect(370, 62, 61, 23))
+        self.label_folder_to_save_2.setGeometry(QtCore.QRect(300, 60, 61, 23))
         self.label_folder_to_save_2.setObjectName("label_folder_to_save_2")
         self.label_folder_to_save_3 = QtWidgets.QLabel(self.recording)
-        self.label_folder_to_save_3.setGeometry(QtCore.QRect(496, 62, 51, 23))
+        self.label_folder_to_save_3.setGeometry(QtCore.QRect(570, 60, 51, 23))
         self.label_folder_to_save_3.setObjectName("label_folder_to_save_3")
         self.pushButton_set_recording_parameters = QtWidgets.QPushButton(self.recording)
         self.pushButton_set_recording_parameters.setGeometry(QtCore.QRect(10, 110, 220, 23))
@@ -84,7 +84,7 @@ class Ui_MainWindow(object):
         self.pushButton_plot_live_dynamics.setObjectName("pushButton_plot_live_dynamics")
         self.toolBoxfdsfs.addItem(self.recording, "")
         self.page_3 = QtWidgets.QWidget()
-        self.page_3.setGeometry(QtCore.QRect(0, 0, 821, 213))
+        self.page_3.setGeometry(QtCore.QRect(0, 0, 100, 30))
         self.page_3.setObjectName("page_3")
         self.pushButton_choose_file_to_load = QtWidgets.QPushButton(self.page_3)
         self.pushButton_choose_file_to_load.setGeometry(QtCore.QRect(10, 10, 131, 23))
@@ -109,7 +109,7 @@ class Ui_MainWindow(object):
         self.pushButton_clearLog.setObjectName("pushButton_clearLog")
         MainWindow.setCentralWidget(self.centralwidget)
         self.menubar = QtWidgets.QMenuBar(MainWindow)
-        self.menubar.setGeometry(QtCore.QRect(0, 0, 852, 21))
+        self.menubar.setGeometry(QtCore.QRect(0, 0, 852, 26))
         self.menubar.setObjectName("menubar")
         self.menuTools = QtWidgets.QMenu(self.menubar)
         self.menuTools.setObjectName("menuTools")

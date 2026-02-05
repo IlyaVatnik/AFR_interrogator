@@ -32,7 +32,7 @@
        <x>0</x>
        <y>0</y>
        <width>821</width>
-       <height>213</height>
+       <height>197</height>
       </rect>
      </property>
      <attribute name="label">
@@ -96,8 +96,8 @@
       <rect>
        <x>0</x>
        <y>0</y>
-       <width>821</width>
-       <height>213</height>
+       <width>100</width>
+       <height>30</height>
       </rect>
      </property>
      <attribute name="label">
@@ -191,7 +191,7 @@
        <x>0</x>
        <y>0</y>
        <width>821</width>
-       <height>213</height>
+       <height>197</height>
       </rect>
      </property>
      <attribute name="label">
@@ -213,9 +213,9 @@
      <widget class="QLineEdit" name="lineEdit_file_name">
       <property name="geometry">
        <rect>
-        <x>440</x>
+        <x>370</x>
         <y>64</y>
-        <width>51</width>
+        <width>181</width>
         <height>20</height>
        </rect>
       </property>
@@ -229,8 +229,8 @@
      <widget class="QLabel" name="label_folder_to_save_2">
       <property name="geometry">
        <rect>
-        <x>370</x>
-        <y>62</y>
+        <x>300</x>
+        <y>60</y>
         <width>61</width>
         <height>23</height>
        </rect>
@@ -242,8 +242,8 @@
      <widget class="QLabel" name="label_folder_to_save_3">
       <property name="geometry">
        <rect>
-        <x>496</x>
-        <y>62</y>
+        <x>570</x>
+        <y>60</y>
         <width>51</width>
         <height>23</height>
        </rect>
@@ -287,8 +287,8 @@
       <rect>
        <x>0</x>
        <y>0</y>
-       <width>821</width>
-       <height>213</height>
+       <width>100</width>
+       <height>30</height>
       </rect>
      </property>
      <attribute name="label">
@@ -387,7 +387,7 @@
      <x>0</x>
      <y>0</y>
      <width>852</width>
-     <height>21</height>
+     <height>26</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuTools">

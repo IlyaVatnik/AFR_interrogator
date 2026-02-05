@@ -5,8 +5,8 @@ Created on Wed Jan 21 11:32:18 2026
 @author: Илья
 """
 
-__version__='1.2.3'
-__date__ = '2026.02.04'
+__version__='1.2.4'
+__date__ = '2026.02.05'
 
 import os
     
@@ -270,7 +270,7 @@ class MainWindow(ThreadedMainWindow):
                 self.it.start_freq_stream(self.params.record.rep_rate)
                 stats = record_to_file(self.it, self.saving_dir_path+FilePrefix+".fbgs", duration_sec=self.params.record.recording_duration,
                                        channels=self.params.it.channels,FBGs=self.params.it.FBGs,write_every_n=self.params.record.write_every_nth)
-                self.logText("Rcording finished: {}".format(stats))
+                self.logText("Recording finished: {}".format(stats))
                 self.it.stop_freq_stream()
             except Exception as e:
                 self.logWarningText(str(e))
@@ -288,13 +288,13 @@ class MainWindow(ThreadedMainWindow):
                     write_every_n=self.params.record.write_every_nth,
                     filepath=self.saving_dir_path+FilePrefix+".fbgs",
                     duration_sec=self.params.record.recording_duration,
-                    plot_channel=self.params.it.channels[0],
-                    plot_fbg_indices=np.array(self.params.it.FBGs[0])-1,
+                    plot_channels=self.params.it.channels,
+                    plot_FBGs=np.array(self.params.it.FBGs)-1,
                     window_sec=10.0,
                     max_fps=30    
                 )
                 QTimer.singleShot(int(self.params.record.recording_duration * 1000), self._stop_all)
-                
+                self.logText("Recording finished: {}".format(stats))
             except Exception as e:
                 self.logWarningText(str(e))
                 # ... окно живёт; когда захотите — останавливайте
@@ -338,7 +338,7 @@ class MainWindow(ThreadedMainWindow):
             self.logText('In this file there are channels {} and FBGs {} in these channels'.format(channel_list,FBGs_list))
             for ch in self.params.it.channels:
                 N_FBG=len(self.params.it.FBGs[ch-1])
-                fig,axes=plt.subplots(nrows=N_FBG)
+                fig,axes=plt.subplots(nrows=N_FBG,sharex=True)
                 fig.supxlabel("Time, s")
                 fig.supylabel("FBG wavelength, nm")
                 for ii,FBG in enumerate(self.params.it.FBGs[ch-1]):
