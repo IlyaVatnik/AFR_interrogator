@@ -895,6 +895,40 @@ class Interrogator:
     '''
     '''
  
+def average_FBG_measurements(data):
+    
+    
+    num_lists = len(data)
+    max_length = len(data[0])  # Количество подсписков
+    
+    # Создаем списки для сумм и счетчиков
+    sums = [[] for _ in range(max_length)]
+    counts = [[] for _ in range(max_length)]
+    
+    # Обрабатываем каждый входной список
+    for lst in data:
+        for i, inner in enumerate(lst):
+            # Если подсписок не пустой, добавляем элементы в sums и counts
+            if inner:
+                # Инициализируем sums и counts для этого подсписка
+                if len(sums[i]) == 0:
+                    sums[i] = [0] * len(inner)  # Инициализация массива сумм
+                    counts[i] = [0] * len(inner)  # Инициализация массива счетчиков
+                
+                for j, value in enumerate(inner):
+                    sums[i][j] += value
+                    counts[i][j] += 1
+    
+    # Формируем средние значения
+    averages = []
+    for i in range(max_length):
+        if counts[i]:  # Проверяем, что есть счетчики для этого подсписка
+            avg = [sums[i][j] / counts[i][j] if counts[i][j] > 0 else np.nan for j in range(len(sums[i]))]
+            averages.append(avg)
+        else:
+            averages.append([])  # Если нет счетчиков, добавляем пустой список
+
+    return averages
 
 
 #%%
