@@ -5,8 +5,8 @@ Created on Wed Jan 21 11:32:18 2026
 @author: Илья
 """
 
-__version__='1.2.4'
-__date__ = '2026.02.05'
+__version__='1.3.2'
+__date__ = '2026.02.12'
 
 import os
     
@@ -146,7 +146,7 @@ class MainWindow(ThreadedMainWindow):
         self.ui.pushButton_plot_live_dynamics.toggled[bool].connect(self.plot_live_dynamics)
         self.ui.pushButton_set_it_parameters.pressed.connect(self.set_it_parameters)
         self.ui.pushButton_set_recording_parameters.pressed.connect(self.set_recording_parameters)
-        self.ui.pushButton_connect.pressed.connect(self.connect_interrogator)
+        self.ui.pushButton_connect.toggled[bool].connect(self.connect_interrogator)
         self.ui.pushButton_choose_file_to_load.clicked.connect(self.choose_file_to_load)
         self.ui.pushButton_choose_folder_to_save.clicked.connect(self.choose_folder_to_save)
         self.ui.pushButton_plot_from_file.clicked.connect(self.plot_from_file)
@@ -166,14 +166,19 @@ class MainWindow(ThreadedMainWindow):
         
     
         
-    def connect_interrogator(self):
-        try:
-            self.it = Interrogator(self.params.it.it_IP,self.params.it.PC_IP)
-            self.set_gains()
-            # self.add_thread(self.it)
-            self.logText('Connected to interrogator')
-        except Exception as e:
-            self.logWarningText(str(e))
+    def connect_interrogator(self,pressed):
+        if pressed:
+            try:
+                self.it = Interrogator(self.params.it.it_IP,self.params.it.PC_IP)
+                self.set_gains()
+                # self.add_thread(self.it)
+                self.logText('Connected to interrogator')
+            except Exception as e:
+                self.logWarningText(str(e))
+        else:
+            del self.it
+            self.logText('disconnected from interrogator')
+            
             
                   
     def set_it_parameters(self):
@@ -199,15 +204,17 @@ class MainWindow(ThreadedMainWindow):
 
     def single_measurement(self):
         try:
-            FBGs_list=[]
-            time0=time.time()
-            while time.time()-time0<self.params.it.averaging_time_for_single_FBG_measurement:
-                FBGs_list.append(self.it.get_single_FBG_measurement())
-            FBGs=average_FBG_measurements(FBGs_list)
+            FBGs=self.it.get_averaged_single_FBG_measurement(self.params.it.averaging_time_for_single_FBG_measurement)
+            if FBGs==None:
+                self.logWarningText('error. no data returned from Interrogator')
+                return 
+            string=''
             for ch in self.params.it.channels:
-                if FBGs[ch-1] is not None:
-                    self.logText( f'channel{ch}:  '+(", ".join(f"{x:.3f}" for x in FBGs[ch-1]))+ ' nm')
-            
+
+                    if FBGs[ch-1] is not None:
+                        string+=f'channel{ch}:  '+(", ".join(f"{x:.3f}" for x in FBGs[ch-1]))+ ' nm'
+    
+            self.logText(string)
             if self.ui.checkBox_plot_single_spectrum.isChecked():
                 waves=self.it.get_waves()
                 for ch in self.params.it.channels:

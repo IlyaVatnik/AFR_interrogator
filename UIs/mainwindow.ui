@@ -11,7 +11,7 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>MainWindow</string>
+   <string>Interrogator measurements</string>
   </property>
   <widget class="QWidget" name="centralwidget">
    <widget class="QToolBox" name="toolBoxfdsfs">
@@ -49,6 +49,9 @@
       </property>
       <property name="text">
        <string>Connect interrogator</string>
+      </property>
+      <property name="checkable">
+       <bool>true</bool>
       </property>
      </widget>
      <widget class="QPushButton" name="pushButton_set_it_parameters">
@@ -96,8 +99,8 @@
       <rect>
        <x>0</x>
        <y>0</y>
-       <width>100</width>
-       <height>30</height>
+       <width>98</width>
+       <height>28</height>
       </rect>
      </property>
      <attribute name="label">
@@ -190,8 +193,8 @@
       <rect>
        <x>0</x>
        <y>0</y>
-       <width>821</width>
-       <height>197</height>
+       <width>98</width>
+       <height>28</height>
       </rect>
      </property>
      <attribute name="label">
@@ -287,8 +290,8 @@
       <rect>
        <x>0</x>
        <y>0</y>
-       <width>100</width>
-       <height>30</height>
+       <width>98</width>
+       <height>28</height>
       </rect>
      </property>
      <attribute name="label">

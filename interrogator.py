@@ -7,8 +7,8 @@ Created on Fri Oct 17 14:19:23 2025
 
 For the AFR Arcadia Optronix Interrogator
 """
-__version__='1.5'
-__date__='2026.02.02'
+__version__='1.6.2'
+__date__='2026.02.12'
 
 
 import socket
@@ -111,6 +111,8 @@ class Interrogator:
         self.thresholds=np.nan*np.zeros(self.channels)
         self.gains_auto=False*np.zeros(self.channels)
         self.gains_manual=0*np.zeros(self.channels)
+        
+        self.averaging_time_for_single_FBG_measurement=0.1
         
         # При инициализации отправим STOP, чтобы модуль прекратил поток, если он был включён ранее
         self.stop_freq_stream()
@@ -472,16 +474,34 @@ class Interrogator:
            return fr['timestamp'], temp 
                
     def get_single_FBG_measurement(self, timeout: float = 0.1):
+        try:
+            self._send(bytes([self.ID_WORK, self.FC_DEBUG, 0x06, 0x00, 0x00, 0x00]))
+        
+            freq_raw = self._wait_for_packet(self.ID_WORK, self.FC_READ_FREQ, timeout=timeout)
+            if not freq_raw:
+                raise TimeoutError("No 0x30 0x02 after DEBUG one sweep")
+            freq_frame = self._parse_freq_frame(freq_raw)
+            wavelengths_FBGs=freq_frame['wavelength_nm']
+            wavelengths_FBGs=[[x for x in row if not np.isnan(x)] for row in wavelengths_FBGs]
+            
+            return wavelengths_FBGs
+        except Exception as e:
+            print(str(e)+'problem in get_single_FBG_measurement')
     
-        self._send(bytes([self.ID_WORK, self.FC_DEBUG, 0x06, 0x00, 0x00, 0x00]))
-    
-        freq_raw = self._wait_for_packet(self.ID_WORK, self.FC_READ_FREQ, timeout=timeout)
-        if not freq_raw:
-            raise TimeoutError("No 0x30 0x02 after DEBUG one sweep")
-        freq_frame = self._parse_freq_frame(freq_raw)
-        wavelengths_FBGs=freq_frame['wavelength_nm']
-        wavelengths_FBGs=[[x for x in row if not np.isnan(x)] for row in wavelengths_FBGs]
-        return wavelengths_FBGs
+
+    def get_averaged_single_FBG_measurement(self, average_time=None):
+        try:
+            FBGs_list=[]
+            time0=time.time()
+            if average_time==None:
+                average_time=self.averaging_time_for_single_FBG_measurement
+            while time.time()-time0<average_time:
+                FBGs_list.append(self.get_single_FBG_measurement())
+            wavelengths_FBGs=average_FBG_measurements(FBGs_list)
+            return wavelengths_FBGs
+        except Exception as e:
+            print(str(e))
+
 
     def get_single_spectrum(self, channel: int, timeout: float = 0.01) -> dict:
         # Разовый запрос ADC по одному каналу (2.3.4).
@@ -551,6 +571,7 @@ class Interrogator:
                 last_log = now
     
     def _wait_for_packet(self, id_byte: int, fc_byte: int, timeout: float) -> Optional[bytes]:
+        try:
             """
             Ждёт и собирает многочастный ответ:
             - Первая дейтаграмма: содержит заголовок протокола (header_len байт) + начало payload.
@@ -638,6 +659,8 @@ class Interrogator:
                 return None
         
             return bytes(buf)
+        except Exception as e:
+            print(str(e)+ 'Problem in _wait_for_packet')
 
 
 
@@ -938,17 +961,17 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     it = Interrogator('10.2.15.150','10.2.15.158')
     #%%
-    waves=it.get_waves()
+    # waves=it.get_waves()
    
-    spectrum=it.get_single_spectrum(1)
-    plt.plot(waves,spectrum)
+    # spectrum=it.get_single_spectrum(1)
+    # plt.plot(waves,spectrum)
 #%%
     # Прочитать идентификацию и параметры
     
     
-    ver = it.read_version()
-    sn = it.read_sn()
-    print(f"Version: {ver}, SN: {sn}")
+    # ver = it.read_version()
+    # sn = it.read_sn()
+    # print(f"Version: {ver}, SN: {sn}")
     
     
     # ok = it.set_sweep(start_freq_ghz=196250, stop_freq_ghz=191150, step_ghz=2, ad_step_ghz=2)
@@ -974,74 +997,85 @@ if __name__ == "__main__":
  
     
     #%%
-    res=it.get_single_FBG_measurement()
+    # for i in range(1000):
+    #     res=it.get_single_FBG_measurement()
+    #     if res==None:
+    #         print('haha')
+    # print(res)
+    
+    
+    for i in range(1000):
+        res=it.get_averaged_single_FBG_measurement(0.1)
+        if res==None:
+            print('hehe')
     print(res)
     
     #%%
-    waves=it.get_waves()
-    time0=time.time()
-    times=[time0]
-    spectra=[]
-    for n in range(10):
-        spectrum=it.get_single_spectrum(1)
-        times.append(time.time())
-        spectra.append(spectrum)
-    times=np.array(times)
-    times-=time0
-    time_gaps=np.diff(times)
-    print(np.mean(time_gaps),np.std(time_gaps))
-    plt.figure()
-    plt.plot(time_gaps)
-    plt.ylabel('Time to acquire a single spectrum, s')
-    plt.xlabel('Index of try')
+    # waves=it.get_waves()
+    # time0=time.time()
+    # times=[time0]
+    # spectra=[]
+    # for n in range(1000):
+    #     spectrum=it.get_single_spectrum(1)
+    #     times.append(time.time())
+    #     spectra.append(spectrum)
+    # times=np.array(times)
+    # times-=time0
+    # time_gaps=np.diff(times)
+    # print(np.mean(time_gaps),np.std(time_gaps))
     
-    plt.figure()
-    for ii,s in enumerate(spectra):
-        plt.plot(waves, s+ii)
+    # plt.figure()
+    # plt.plot(time_gaps)
+    # plt.ylabel('Time to acquire a single spectrum, s')
+    # plt.xlabel('Index of try')
     
-    plt.ylabel('Time to acquire a single spectrum, s')
-    plt.xlabel('Index of try')
+    # plt.figure()
+    # for ii,s in enumerate(spectra):
+    #     plt.plot(waves, s+ii)
+    
+    # plt.ylabel('Time to acquire a single spectrum, s')
+    # plt.xlabel('Index of try')
     
     #%%
-    ch=1
-    waves=it.get_waves()
-    it.set_gain(ch, auto=False, manual_level=0) 
+    # ch=1
+    # waves=it.get_waves()
+    # it.set_gain(ch, auto=False, manual_level=0) 
     
-    spectrum=it.get_single_spectrum(ch)
-    plt.figure()
-    plt.plot(waves,spectrum)
-    plt.xlabel('Wavelength, nm')
-    plt.ylabel('Spectral power, dBm')
+    # spectrum=it.get_single_spectrum(ch)
+    # plt.figure()
+    # plt.plot(waves,spectrum)
+    # plt.xlabel('Wavelength, nm')
+    # plt.ylabel('Spectral power, dBm')
 #%%
     # Запуск потока частот, чтение одного кадра и быстрый доступ к данным
-    it.start_freq_stream()
-    time.sleep(0.2)
-    fr=it.pop_freq_frame()
-    time_stamp,data=it.get_data()
-    ch=1
-    # data=data[ch-1]
-    print(time_stamp,data)
-    it.stop_freq_stream()
-    #%%
+    # it.start_freq_stream()
+    # time.sleep(0.2)
+    # fr=it.pop_freq_frame()
+    # time_stamp,data=it.get_data()
+    # ch=1
+    # # data=data[ch-1]
+    # print(time_stamp,data)
+    # it.stop_freq_stream()
+    # #%%
     del it
     
    #%%
-    FBGs=it.get_single_FBG_measurement()
-    print(FBGs)
-    waves=it.get_waves()
-    for ch in range(1):
-        spectrum=it.get_single_spectrum(ch+1)
-        plt.figure()
-        plt.plot(waves,spectrum)
-        plt.xlabel('Wavelength, nm')
-        plt.ylabel('Spectral power, dBm')
-        ymin, ymax = plt.ylim()
-        if FBGs[ch] is not None:
-            for FBG_wave in FBGs[ch]:
-                if FBG_wave is not np.nan:
-                    plt.axvline(FBG_wave,  color='red')
-                    # plt.text(FBG_wave-3, (ymax+ymin)/2, f'{FBG_wave:.4f}' )
-        plt.title('Channel {}'.format(ch))
+    # FBGs=it.get_single_FBG_measurement()
+    # print(FBGs)
+    # waves=it.get_waves()
+    # for ch in range(1):
+    #     spectrum=it.get_single_spectrum(ch+1)
+    #     plt.figure()
+    #     plt.plot(waves,spectrum)
+    #     plt.xlabel('Wavelength, nm')
+    #     plt.ylabel('Spectral power, dBm')
+    #     ymin, ymax = plt.ylim()
+    #     if FBGs[ch] is not None:
+    #         for FBG_wave in FBGs[ch]:
+    #             if FBG_wave is not np.nan:
+    #                 plt.axvline(FBG_wave,  color='red')
+    #                 # plt.text(FBG_wave-3, (ymax+ymin)/2, f'{FBG_wave:.4f}' )
+    #     plt.title('Channel {}'.format(ch))
 
    
     

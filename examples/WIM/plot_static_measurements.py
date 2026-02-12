@@ -46,6 +46,7 @@ with open(file_name, 'r') as file:
 coords=np.array(coords)
 
 temps_bed=np.array(temps_bed)  
+temps_chamber=np.array(temps_chamber)
 #%%
 def plot_3d(coords,Z):
     x, y = coords[:, 0], coords[:, 1]
@@ -80,6 +81,13 @@ plt.xlabel('X, mm')
 plt.ylabel('Y, mm')
 plt.gca().set_zlabel("Bed temperature")
 plt.tight_layout()
+
+plot_3d(coords,temps_chamber)
+plt.xlabel('X, mm')
+plt.ylabel('Y, mm')
+plt.gca().set_zlabel("Chamber temperature")
+plt.tight_layout()
+
 
 for ch in channels_to_plot:
     for FBG in FBGs_to_plot[ch-1]:

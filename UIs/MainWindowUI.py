@@ -25,6 +25,7 @@ class Ui_MainWindow(object):
         self.page.setObjectName("page")
         self.pushButton_connect = QtWidgets.QPushButton(self.page)
         self.pushButton_connect.setGeometry(QtCore.QRect(10, 20, 141, 23))
+        self.pushButton_connect.setCheckable(True)
         self.pushButton_connect.setObjectName("pushButton_connect")
         self.pushButton_set_it_parameters = QtWidgets.QPushButton(self.page)
         self.pushButton_set_it_parameters.setGeometry(QtCore.QRect(360, 20, 220, 23))
@@ -37,7 +38,7 @@ class Ui_MainWindow(object):
         self.label_folder_to_save.setObjectName("label_folder_to_save")
         self.toolBoxfdsfs.addItem(self.page, "")
         self.page_2 = QtWidgets.QWidget()
-        self.page_2.setGeometry(QtCore.QRect(0, 0, 100, 30))
+        self.page_2.setGeometry(QtCore.QRect(0, 0, 98, 28))
         self.page_2.setObjectName("page_2")
         self.pushButton_single_measurement = QtWidgets.QPushButton(self.page_2)
         self.pushButton_single_measurement.setGeometry(QtCore.QRect(10, 10, 131, 23))
@@ -60,7 +61,7 @@ class Ui_MainWindow(object):
         self.checkBox_plot_single_spectrum.setObjectName("checkBox_plot_single_spectrum")
         self.toolBoxfdsfs.addItem(self.page_2, "")
         self.recording = QtWidgets.QWidget()
-        self.recording.setGeometry(QtCore.QRect(0, 0, 821, 197))
+        self.recording.setGeometry(QtCore.QRect(0, 0, 98, 28))
         self.recording.setObjectName("recording")
         self.pushButton_start_recording = QtWidgets.QPushButton(self.recording)
         self.pushButton_start_recording.setGeometry(QtCore.QRect(10, 60, 221, 23))
@@ -84,7 +85,7 @@ class Ui_MainWindow(object):
         self.pushButton_plot_live_dynamics.setObjectName("pushButton_plot_live_dynamics")
         self.toolBoxfdsfs.addItem(self.recording, "")
         self.page_3 = QtWidgets.QWidget()
-        self.page_3.setGeometry(QtCore.QRect(0, 0, 100, 30))
+        self.page_3.setGeometry(QtCore.QRect(0, 0, 98, 28))
         self.page_3.setObjectName("page_3")
         self.pushButton_choose_file_to_load = QtWidgets.QPushButton(self.page_3)
         self.pushButton_choose_file_to_load.setGeometry(QtCore.QRect(10, 10, 131, 23))
@@ -134,7 +135,7 @@ class Ui_MainWindow(object):
 
     def retranslateUi(self, MainWindow):
         _translate = QtCore.QCoreApplication.translate
-        MainWindow.setWindowTitle(_translate("MainWindow", "MainWindow"))
+        MainWindow.setWindowTitle(_translate("MainWindow", "Interrogator measurements"))
         self.pushButton_connect.setText(_translate("MainWindow", "Connect interrogator"))
         self.pushButton_set_it_parameters.setText(_translate("MainWindow", "Set interrogator parameters"))
         self.pushButton_choose_folder_to_save.setText(_translate("MainWindow", "Choose folder to save"))
