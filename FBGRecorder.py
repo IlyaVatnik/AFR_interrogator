@@ -17,8 +17,8 @@ FBGrecorder.py — безопасная безголовая запись пот
 Live-плот: live_plot_wavelengths(it, channel, fbg_indices, ...) — запускайте из главного потока GUI.
 """
 
-__version__='1.4'
-__date__='2026.02.04'
+__version__='1.5'
+__date__='2026.02.12'
 
 
 
@@ -488,7 +488,7 @@ def record_to_file(it: Any,
                    channels: Optional[List[int]] = None,        # 1-based
                    FBGs: Optional[List[List[int]]] = None ,# 1-based
                    write_every_n: int = 1,
-                   params: Optional[Dict] = None
+                   other_params: Optional[Dict] = None
                    ) -> Dict[str, Any]:
     """
     Если заданы channels/FBGs — записывается только это подмножество.
@@ -550,7 +550,8 @@ def record_to_file(it: Any,
         FBGs=FBGs,
         record_channels=rec_channels_zb,
         record_fbg_map=rec_fbg_map_zb,
-        write_every_n=int(write_every_n)
+        write_every_n=int(write_every_n),
+        other_params=other_params
     )
 
     rec = FBGRecorder(it, cfg)
