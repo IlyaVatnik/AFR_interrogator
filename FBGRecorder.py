@@ -1105,7 +1105,7 @@ def live_plot_wavelengths(it,
         else:
             axes_list = list(np.ravel(axes))
 
-        main_title = title or f"Channel {channel} — FBGs {fbg_indices}"
+        main_title = title or f"Channel {channel} "
         fig.suptitle(main_title)
 
         # ОДНА общая подпись осей на всю фигуру
@@ -1121,7 +1121,7 @@ def live_plot_wavelengths(it,
 
             # не ставим xlabel/ylabel на каждую ось — только общий supxlabel/supylabel
             # вместо легенды — заголовок сабплота (один на ось)
-            ax.set_title(f"FBG {fbg}", loc="left", fontsize=10, pad=2)
+            ax.set_title(f"FBG {fbg+1}", loc="left", fontsize=10, pad=2)
 
             line, = ax.plot([], [], color=colors[k % len(colors)])
             if ylim is not None:
@@ -1133,7 +1133,7 @@ def live_plot_wavelengths(it,
 
     else:
         fig, ax = plt.subplots(figsize=(8, 4))
-        main_title = title or f"Channel {channel} — FBG {fbg_indices}"
+        main_title = title or f"Channel {channel}"
         ax.set_title(main_title)
         ax.set_xlabel("Time, s")
         ax.set_ylabel("FBG wavelength, nm")
@@ -1141,7 +1141,7 @@ def live_plot_wavelengths(it,
         lines = {}
         colors = plt.cm.tab10.colors
         for k, i in enumerate(fbg_indices):
-            line, = ax.plot([], [], label=f"FBG {i}", color=colors[k % len(colors)])
+            line, = ax.plot([], [], label=f"FBG {i+1}", color=colors[k % len(colors)])
             lines[i] = line
         ax.legend(loc="best")
         if ylim is not None:

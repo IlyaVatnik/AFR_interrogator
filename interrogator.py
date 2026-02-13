@@ -26,6 +26,9 @@ import math
 Лазер интеррогатора светит 1.2 мВт (12.11.2025, 4 канал)
 '''
 
+class InterrogatorError(RuntimeError):
+    pass
+
 @dataclass
 class InterrogatorUDPConfig:
     # IP/порт модуля и локальная привязка ПК
@@ -486,8 +489,9 @@ class Interrogator:
             
             return wavelengths_FBGs
         except Exception as e:
-            print(str(e)+'problem in get_single_FBG_measurement')
-    
+            string='Problem in get_single_FBG_measurement: '+str(e)
+            print(string)
+            raise InterrogatorError(string)
 
     def get_averaged_single_FBG_measurement(self, average_time=None):
         try:
