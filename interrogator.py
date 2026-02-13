@@ -505,6 +505,7 @@ class Interrogator:
             return wavelengths_FBGs
         except Exception as e:
             print(str(e))
+            raise InterrogatorError(str(e))
 
 
     def get_single_spectrum(self, channel: int, timeout: float = 0.01) -> dict:
