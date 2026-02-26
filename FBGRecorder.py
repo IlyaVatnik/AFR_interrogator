@@ -17,8 +17,8 @@ FBGrecorder.py — безопасная безголовая запись пот
 Live-плот: live_plot_wavelengths(it, channel, fbg_indices, ...) — запускайте из главного потока GUI.
 """
 
-__version__='1.5'
-__date__='2026.02.12'
+__version__='1.6'
+__date__='2026.02.26'
 
 
 
@@ -709,7 +709,9 @@ class FrameFanout:
     def add_consumer_queue(self, q: "Queue[Tuple[float, List[List[float]]]]"):
         with self._lock:
             self._queues.append(q)
-
+    def remove_consumer_queue(self, q):
+        with self._lock:
+            self._queues = [qq for qq in self._queues if qq is not q]
     def start(self):
         import threading, time
         if self._thr and self._thr.is_alive():
@@ -1572,6 +1574,136 @@ def record_long_dynamics(it,
 
     return st
 
+
+from typing import Any, Dict, List, Optional, Tuple
+
+def record_to_file_from_queue(it: Any,
+                              q_rec: "Queue[Tuple[float, List[List[float]]]]",
+                              filepath: str,
+                              duration_sec: float,
+                              channels: Optional[List[int]] = None,        # 1-based
+                              FBGs: Optional[List[List[int]]] = None,      # 1-based
+                              write_every_n: int = 1,
+                              other_params: Optional[Dict] = None,
+                              warmup_sec: float = 1.0,
+                              drop_during_warmup: bool = True,
+                              batch_size: int = 1000,
+                              fsync_every_batches: int = 20) -> Dict[str, Any]:
+    """
+    Пишет .fbgs из очереди кадров q_rec, которую наполняет FrameFanout.
+    Элемент очереди: (t_perf, wl_full), где wl_full: List[List[float]] по всем каналам.
+    """
+
+    # --- maps 0-based для заголовка и выбора данных ---
+    ch_map_0 = None
+    fbg_map_0 = None
+    if channels is not None:
+        ch_map_0 = [int(c) - 1 for c in channels]
+        if FBGs is not None:
+            if len(FBGs) != len(ch_map_0):
+                raise ValueError("Длина FBGs должна совпадать с длиной channels")
+            fbg_map_0 = [[int(i) - 1 for i in arr] for arr in FBGs]
+
+    stats = {
+        "started_at": time.perf_counter(),
+        "wr_frames": 0,
+        "wr_fps": 0.0,
+        "blocks_written": 0,
+    }
+
+    t_start = stats["started_at"]
+    t_end = t_start + float(duration_sec)
+    warmup_deadline = t_start + max(0.0, float(warmup_sec))
+
+    write_every = max(1, int(write_every_n))
+    taken_ctr = 0
+
+    def _write_block(fh, batch):
+        if not batch:
+            return 0
+        blob = pickle.dumps(batch, protocol=pickle.HIGHEST_PROTOCOL)
+        fh.write(struct.pack(">I", len(blob)))
+        fh.write(blob)
+        return 1
+
+    blocks_written = 0
+    wr_count_since = 0
+    last_wr = time.perf_counter()
+
+    with open(filepath, "wb") as f:
+        header = make_header(it, channel_map=ch_map_0, fbg_map=fbg_map_0, other_params=other_params)
+        pickle.dump(header, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+        batch: List[Tuple[float, float, int, List[List[float]]]] = []
+        writing_active = False
+
+        def flush_batch():
+            nonlocal blocks_written, batch
+            wrote = _write_block(f, batch)
+            if wrote:
+                blocks_written += 1
+                stats["blocks_written"] = blocks_written
+                batch.clear()
+                if fsync_every_batches and (blocks_written % fsync_every_batches == 0):
+                    f.flush()
+                    os.fsync(f.fileno())
+
+        while True:
+            now = time.perf_counter()
+            if now >= t_end:
+                break
+
+            if not writing_active and now >= warmup_deadline:
+                writing_active = True
+
+            try:
+                t_perf, wl_full = q_rec.get(timeout=min(0.1, max(0.0, t_end - now)))
+            except Empty:
+                if writing_active:
+                    flush_batch()
+                continue
+
+            if not writing_active and drop_during_warmup:
+                continue
+
+            taken_ctr += 1
+            if (taken_ctr % write_every) != 0:
+                continue
+
+            # --- применяем выбор каналов/FBG ---
+            if ch_map_0 is None:
+                wl_rows = [[float(x) for x in row] for row in wl_full]
+            else:
+                wl_rows = []
+                for idx, ch0 in enumerate(ch_map_0):
+                    src = wl_full[ch0] if (isinstance(wl_full, (list, tuple)) and 0 <= ch0 < len(wl_full)) else []
+                    if fbg_map_0 is not None and idx < len(fbg_map_0):
+                        sel = fbg_map_0[idx]
+                        wl_rows.append([float(src[i]) if 0 <= i < len(src) else float("nan") for i in sel])
+                    else:
+                        wl_rows.append([float(x) for x in src])
+
+            ts_unix = time.time()
+            pkt_ctr = -1
+            batch.append((float(t_perf), float(ts_unix), int(pkt_ctr), wl_rows))
+            stats["wr_frames"] += 1
+            wr_count_since += 1
+
+            if writing_active and (len(batch) >= batch_size):
+                flush_batch()
+
+            if (now - last_wr) >= 0.5:
+                stats["wr_fps"] = wr_count_since / (now - last_wr)
+                wr_count_since = 0
+                last_wr = now
+
+        if writing_active:
+            flush_batch()
+
+        f.flush()
+        os.fsync(f.fileno())
+
+    return stats
 # ==========================
 # Пример использования (комментарии)
 # ==========================
