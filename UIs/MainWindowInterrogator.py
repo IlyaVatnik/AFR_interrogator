@@ -5,7 +5,7 @@ Created on Wed Jan 21 11:32:18 2026
 @author: Илья
 """
 
-__version__='1.4.0'
+__version__='1.4.1'
 __date__ = '2026.02.27'
 
 import os
@@ -23,7 +23,11 @@ import time
 
 
 
-from FBGRecorder import record_and_plot,record_to_file,read_fbg_stream_raw_lp,live_plot_wavelengths,record_spectra_to_file,read_spectra_from_file
+from FBGRecorder import (
+    record_and_plot, record_to_file, read_fbg_stream_raw_lp,
+    start_live_plot_session,  # NEW
+    record_spectra_to_file, read_spectra_from_file
+)
 from interrogator import Interrogator, average_FBG_measurements
 
 
@@ -177,8 +181,25 @@ class MainWindow(ThreadedMainWindow):
                 self.logText('Connected to interrogator')
             except Exception as e:
                 self.logWarningText(str(e))
+        
         else:
-            del self.it
+            try:
+                if self.ui.pushButton_plot_live_dynamics.isChecked():
+                    self.ui.pushButton_plot_live_dynamics.setChecked(False)
+                    time.sleep(0.05)
+            except Exception:
+                pass
+        
+            try:
+                if self.it is not None:
+                    try:
+                        self.it.stop_freq_stream()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        
+            self.it = None
             self.logText('disconnected from interrogator')
             
             
@@ -251,29 +272,64 @@ class MainWindow(ThreadedMainWindow):
             if self.it!=None:
                 self.set_gains()
                 
-    def plot_live_dynamics(self,pressed:bool):
-        if pressed:    
-            self.it.start_freq_stream()
-            self.live_plots=[]
-            for ch in self.params.it.channels:
-                self.live_plots.append(live_plot_wavelengths(self.it, 
-                                                             channel=ch, 
-                                                             fbg_indices=np.array(self.params.it.FBGs[ch-1])-1, 
-                                                             window_sec=10.0,
-                                                             max_fps=30))
-            # self.add_thread(self.stop_live())
+    def plot_live_dynamics(self, pressed: bool):
+        if pressed:
+            try:
+                # старт потока данных
+                self.it.start_freq_stream(self.params.record.rep_rate)
+    
+                # старт live session (fanout + plots)
+                self._stop_live, self._live_info = start_live_plot_session(
+                    it=self.it,
+                    plot_channels=list(self.params.it.channels),      # 1-based
+                    plot_FBGs=list(self.params.it.FBGs),              # 1-based
+                    rep_rate_hz=float(self.params.record.rep_rate),
+                    window_sec=20.0,
+                    max_fps=30,
+                    ylim=None,
+                    title_prefix="Live dynamics",
+                    use_subplots=True,
+                    queue_maxsize=4000,
+                    max_frames_per_update=1200
+                )
+    
+                self.logText("Live dynamics started")
+    
+            except Exception as e:
+                self.logWarningText(str(e))
+                try:
+                    self.ui.pushButton_plot_live_dynamics.setChecked(False)
+                except Exception:
+                    pass
+    
         else:
-            # self.kill_threads(self.stop_live)
-            del self.live_plots
-            # self.stop_live()
-            self.it.stop_freq_stream()
+            try:
+                # остановить live session
+                if hasattr(self, "_stop_live") and self._stop_live is not None:
+                    try:
+                        self._stop_live()
+                    except Exception:
+                        pass
+                    self._stop_live = None
+                    self._live_info = None
+    
+                # остановить приборный стрим
+                try:
+                    self.it.stop_freq_stream()
+                except Exception:
+                    pass
+    
+                self.logText("Live dynamics stopped")
+    
+            except Exception as e:
+                self.logWarningText(str(e))
             
             
     def recording(self):
         FilePrefix=self.ui.lineEdit_file_name.text()
         self.logText('start recording')
         
-        if self.params.type_of_recording=='FBG peaks':
+        if self.params.record.type_of_recording=='FBG peaks':
             if not self.params.record.plot_live_while_recording:
                 
                 try:
@@ -310,13 +366,15 @@ class MainWindow(ThreadedMainWindow):
                 # ... окно живёт; когда захотите — останавливайте
             # stop_all()
             # self.it.stop_freq_stream()
-        elif self.params.type_of_recording=='Spectra':
+        elif self.params.record.type_of_recording=='Spectra':
+
             record_spectra_to_file(self.it,
                                    write_every_n=self.params.record.write_every_nth,
                                    filepath=self.saving_dir_path+FilePrefix+".spectra",
                                    duration_sec=self.params.record.recording_duration,
                                    channels=self.params.it.channels
                                    )
+            self.logText("Recording of spectra finished:")
         
         
     def choose_folder_to_save(self):
@@ -358,9 +416,13 @@ class MainWindow(ThreadedMainWindow):
                 fig,axes=plt.subplots(nrows=N_FBG,sharex=True)
                 fig.supxlabel("Time, s")
                 fig.supylabel("FBG wavelength, nm")
-                for ii,FBG in enumerate(self.params.it.FBGs[ch-1]):
-                    axes[ii].plot(times - times[0], channels[ch][ii+1],color=colors[ii % len(colors)])
-                    axes[ii].set_title(f"FBG {FBG}", loc="left", fontsize=10, pad=2)
+                if N_FBG>1:
+                    for ii,FBG in enumerate(self.params.it.FBGs[ch-1]):
+                        axes[ii].plot(times - times[0], channels[ch][ii],color=colors[ii % len(colors)])
+                        axes[ii].set_title(f"FBG {FBG}", loc="left", fontsize=10, pad=2)
+                else:
+                    axes.plot(times - times[0], channels[ch][self.params.it.FBGs[ch-1][0]],color=colors[0 % len(colors)])
+                    axes.set_title(f"FBG {self.params.it.FBGs[ch-1]}", loc="left", fontsize=10, pad=2)
                 plt.suptitle('ch {}'.format(ch))
                 plt.tight_layout()
                 plt.show()
@@ -378,12 +440,15 @@ class MainWindow(ThreadedMainWindow):
             
         elif file_name.split('.')[1]=='spectra':
             for ch in self.params.it.channels:
-                times,waves,spectra=read_spectra_from_file(self.file_to_load_path,ch)
+                times,waves,spectra,other_params=read_spectra_from_file(self.file_to_load_path,ch)
+                self.logText('Average acqisition rate is {} Hz '.format(1/np.mean(np.diff(times))))
+                self.logText('Other parameters of the record are {} '.format(other_params)) 
                 fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
-                ax.plot_surface(times,waves, spectra, cmap=cm.coolwarm, linewidth=0, antialiased=False)
-                plt.xlabel('Time, s')
-                plt.ylabel('Wavelength, nm')
-                plt.zlabel('Spectral power, dBm')
+                X, Y = np.meshgrid(waves, times)  # X,Y shape (Ny, Nx)
+                ax.plot_surface(X,Y, spectra.T, cmap=cm.coolwarm, linewidth=0, antialiased=False)
+                plt.ylabel('Time, s')
+                plt.xlabel('Wavelength, nm')
+                plt.gca().set_zlabel('Spectral power, dBm')
                 plt.tight_layout()
         
           
