@@ -17,8 +17,8 @@ FBGrecorder.py — безопасная безголовая запись пот
 Live-плот: live_plot_wavelengths(it, channel, fbg_indices, ...) — запускайте из главного потока GUI.
 """
 
-__version__='1.6'
-__date__='2026.02.26'
+__version__='1.7'
+__date__='2026.02.27'
 
 
 
@@ -575,7 +575,7 @@ def record_spectra_to_file(it: Any,
     n_ch=len(channels)
     
     max_acq_rate=300 # Hz
-    max_cols=duration_sec*max_acq_rate
+    max_cols=duration_sec*max_acq_rate/write_every_n/n_ch
     data_path = Path(filepath)
     meta_path = data_path.with_suffix(data_path.suffix+'.meta')
     

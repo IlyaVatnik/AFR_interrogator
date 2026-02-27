@@ -5,13 +5,14 @@ Created on Wed Jan 21 11:32:18 2026
 @author: Илья
 """
 
-__version__='1.3.2'
-__date__ = '2026.02.12'
+__version__='1.4.0'
+__date__ = '2026.02.27'
 
 import os
     
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib import cm
 import json
 
 import pickle
@@ -22,7 +23,7 @@ import time
 
 
 
-from FBGRecorder import record_and_plot,record_to_file,read_fbg_stream_raw_lp,live_plot_wavelengths
+from FBGRecorder import record_and_plot,record_to_file,read_fbg_stream_raw_lp,live_plot_wavelengths,record_spectra_to_file,read_spectra_from_file
 from interrogator import Interrogator, average_FBG_measurements
 
 
@@ -47,6 +48,7 @@ class Params_recording():
         self.recording_duration=10
         self.write_every_nth=10
         self.plot_live_while_recording=False
+        self.type_of_recording='FBG peaks'
     
 
 class Params():
@@ -271,42 +273,50 @@ class MainWindow(ThreadedMainWindow):
         FilePrefix=self.ui.lineEdit_file_name.text()
         self.logText('start recording')
         
-        if not self.params.record.plot_live_while_recording:
-            
-            try:
-                self.it.start_freq_stream(self.params.record.rep_rate)
-                stats = record_to_file(self.it, self.saving_dir_path+FilePrefix+".fbgs", duration_sec=self.params.record.recording_duration,
-                                       channels=self.params.it.channels,FBGs=self.params.it.FBGs,write_every_n=self.params.record.write_every_nth)
-                self.logText("Recording finished: {}".format(stats))
-                self.it.stop_freq_stream()
-            except Exception as e:
-                self.logWarningText(str(e))
+        if self.params.type_of_recording=='FBG peaks':
+            if not self.params.record.plot_live_while_recording:
                 
-            self.it.stop_freq_stream()
-            
-        else:
-            try:
-                self.it.start_freq_stream()
-    
-                self._stop_all, stats = record_and_plot(
-                    self.it,
-                    channels=self.params.it.channels,
-                    FBGs=self.params.it.FBGs,
-                    write_every_n=self.params.record.write_every_nth,
-                    filepath=self.saving_dir_path+FilePrefix+".fbgs",
-                    duration_sec=self.params.record.recording_duration,
-                    plot_channels=self.params.it.channels,
-                    plot_FBGs=np.array(self.params.it.FBGs)-1,
-                    window_sec=10.0,
-                    max_fps=30    
-                )
-                QTimer.singleShot(int(self.params.record.recording_duration * 1000), self._stop_all)
-                self.logText("Recording finished: {}".format(stats))
-            except Exception as e:
-                self.logWarningText(str(e))
+                try:
+                    self.it.start_freq_stream(self.params.record.rep_rate)
+                    stats = record_to_file(self.it, self.saving_dir_path+FilePrefix+".fbgs", duration_sec=self.params.record.recording_duration,
+                                           channels=self.params.it.channels,FBGs=self.params.it.FBGs,write_every_n=self.params.record.write_every_nth)
+                    self.logText("Recording finished: {}".format(stats))
+                    self.it.stop_freq_stream()
+                except Exception as e:
+                    self.logWarningText(str(e))
+                    
+                self.it.stop_freq_stream()
+                
+            else:
+                try:
+                    self.it.start_freq_stream()
+        
+                    self._stop_all, stats = record_and_plot(
+                        self.it,
+                        channels=self.params.it.channels,
+                        FBGs=self.params.it.FBGs,
+                        write_every_n=self.params.record.write_every_nth,
+                        filepath=self.saving_dir_path+FilePrefix+".fbgs",
+                        duration_sec=self.params.record.recording_duration,
+                        plot_channels=self.params.it.channels,
+                        plot_FBGs=np.array(self.params.it.FBGs)-1,
+                        window_sec=10.0,
+                        max_fps=30    
+                    )
+                    QTimer.singleShot(int(self.params.record.recording_duration * 1000), self._stop_all)
+                    self.logText("Recording finished: {}".format(stats))
+                except Exception as e:
+                    self.logWarningText(str(e))
                 # ... окно живёт; когда захотите — останавливайте
             # stop_all()
             # self.it.stop_freq_stream()
+        elif self.params.type_of_recording=='Spectra':
+            record_spectra_to_file(self.it,
+                                   write_every_n=self.params.record.write_every_nth,
+                                   filepath=self.saving_dir_path+FilePrefix+".spectra",
+                                   duration_sec=self.params.record.recording_duration,
+                                   channels=self.params.it.channels
+                                   )
         
         
     def choose_folder_to_save(self):
@@ -330,7 +340,7 @@ class MainWindow(ThreadedMainWindow):
         self.logText('\nSpectrum saved\n')     
         
     def choose_file_to_load(self):
-        DataFilePath= str(QFileDialog.getOpenFileName(self, "Select Data File",'','*.fbgs *.spectrum' )).split("\',")[0].split("('")[1]
+        DataFilePath= str(QFileDialog.getOpenFileName(self, "Select Data File",'','*.fbgs *.spectrum *.spectra' )).split("\',")[0].split("('")[1]
         if DataFilePath=='':
             self.logWarningText('file is not chosen or previous choice is preserved')
         self.file_to_load_path=DataFilePath
@@ -365,6 +375,16 @@ class MainWindow(ThreadedMainWindow):
             plt.xlabel('Wavelength, nm')
             plt.ylabel('Spectral power, dBm')
             plt.tight_layout()
+            
+        elif file_name.split('.')[1]=='spectra':
+            for ch in self.params.it.channels:
+                times,waves,spectra=read_spectra_from_file(self.file_to_load_path,ch)
+                fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
+                ax.plot_surface(times,waves, spectra, cmap=cm.coolwarm, linewidth=0, antialiased=False)
+                plt.xlabel('Time, s')
+                plt.ylabel('Wavelength, nm')
+                plt.zlabel('Spectral power, dBm')
+                plt.tight_layout()
         
           
     def save_parameters_to_file(self):
