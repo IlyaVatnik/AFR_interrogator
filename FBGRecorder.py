@@ -34,6 +34,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple,Iterable
 from matplotlib.animation import FuncAnimation
 import gc
 import numpy as np
+import Path
 
 # Мягкие зависимости
 try:
@@ -560,6 +561,62 @@ def record_to_file(it: Any,
     rec.stop()
     return rec.stats()
 
+
+def record_spectra_to_file(it: Any,
+                           filepath: str,
+                           duration_sec: float,
+                           write_every_n: int = 1,
+                           other_params: Optional[Dict] = None,
+                           channels: Optional[List[int]] = None        # 1-based
+                           ) -> None:
+    
+    dtype=np.float32
+    
+    n_ch=len(channels)
+    
+    max_acq_rate=300 # Hz
+    max_cols=duration_sec*max_acq_rate
+    data_path = Path(filepath)
+    meta_path = data_path.with_suffix(data_path.suffix+'.meta')
+    
+    waves=it.get_waves()
+    n_rows=len(waves)
+    
+    mm = np.memmap(data_path, dtype=dtype, mode="w+", shape=(n_ch, n_rows, max_cols))
+    time_start=time.time()
+    time_current=0
+    times_array=[]
+    jj=0
+    while time_current-time_start<duration_sec:
+        for ii,ch in enumerate(channels):
+            spectrum=it.get_single_spectrum(ch-1)
+            mm[ii,:,jj]=spectrum
+        time_current=time.time()
+        times_array.append(time_current)
+        jj+=1
+    times_array=np.array(times_array)
+    mm.flush()
+    np.savez(meta_path, n_ch=n_ch, n_rows=n_rows, n_cols=jj, max_cols=max_cols,times=times_array,waves=waves, dtype=str(np.dtype(dtype)))
+    
+    
+    
+def read_spectra_from_file(filepath:str,
+                           channel:int):
+    data_path = Path(filepath)
+    meta_path = data_path.with_suffix(data_path.suffix+'.meta')
+    meta = np.load(meta_path)
+    n_ch    = int(meta["n_ch"])
+    n_rows  = int(meta["n_rows"])
+    max_cols= int(meta["max_cols"])
+    n_cols  = int(meta["n_cols"])
+    waves=meta['waves']
+    times=meta['times']
+    dtype   = np.dtype(str(meta["dtype"]))
+    
+    mm = np.memmap(data_path, dtype=dtype, mode="r", shape=(n_ch, n_rows, max_cols))
+    spectra = mm[channel-1, :, :n_cols]     # view без копии
+    
+    return times,waves,spectra
 
 def read_fbg_stream_raw_lp(filepath: str, debug: bool = False):
     """
