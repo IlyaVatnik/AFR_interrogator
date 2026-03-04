@@ -7,8 +7,8 @@ Created on Fri Oct 17 14:19:23 2025
 
 For the AFR Arcadia Optronix Interrogator
 """
-__version__='1.6.2'
-__date__='2026.02.12'
+__version__='1.7.0'
+__date__='2026.03.04'
 
 
 import socket
@@ -25,6 +25,18 @@ import math
 ''''
 Лазер интеррогатора светит 1.2 мВт (12.11.2025, 4 канал)
 '''
+
+class Params_int():
+    def __init__(self):
+        self.it_IP='10.2.60.38'
+        self.PC_IP='10.2.60.33'
+        self.FBGs=[[1,2,3]]
+        self.channels=[1]
+        self.gains_auto=[0,0,0,0]
+        self.gains_manual=[1,1,1,1]
+        self.thresholds=[3000,3000,3000,3000]
+        self.averaging_time_for_single_FBG_measurement=0.5
+        self.rep_rate=2000
 
 class InterrogatorError(RuntimeError):
     pass
@@ -72,9 +84,11 @@ class Interrogator:
 
     def __init__(self, ip,
                  pc_ip,
-                 cfg: InterrogatorUDPConfig = InterrogatorUDPConfig()):
+                 cfg: InterrogatorUDPConfig = InterrogatorUDPConfig(),
+                 params: Params_int=Params_int()):
         self.module_ip=ip
         self.cfg = cfg
+        self.params=params
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         # Просим у ОС большой буфер приёма, чтобы не терять пакеты при пиковой нагрузке
         try:
@@ -114,8 +128,7 @@ class Interrogator:
         self.thresholds=np.nan*np.zeros(self.channels)
         self.gains_auto=False*np.zeros(self.channels)
         self.gains_manual=0*np.zeros(self.channels)
-        
-        self.averaging_time_for_single_FBG_measurement=0.1
+
         
         # При инициализации отправим STOP, чтобы модуль прекратил поток, если он был включён ранее
         self.stop_freq_stream()
@@ -498,7 +511,7 @@ class Interrogator:
             FBGs_list=[]
             time0=time.time()
             if average_time==None:
-                average_time=self.averaging_time_for_single_FBG_measurement
+                average_time=self.params.averaging_time_for_single_FBG_measurement
             while time.time()-time0<average_time:
                 FBGs_list.append(self.get_single_FBG_measurement())
             wavelengths_FBGs=average_FBG_measurements(FBGs_list)

@@ -5,8 +5,8 @@ Created on Wed Jan 21 11:32:18 2026
 @author: Илья
 """
 
-__version__='1.4.1'
-__date__ = '2026.02.27'
+__version__='1.5.0'
+__date__ = '2026.03.04'
 
 import os
     
@@ -28,23 +28,14 @@ from FBGRecorder import (
     start_live_plot_session,  # NEW
     record_spectra_to_file, read_spectra_from_file
 )
-from interrogator import Interrogator, average_FBG_measurements
+from interrogator import Interrogator, average_FBG_measurements,Params_int
 
 
 
 from UIs.MainWindowUI import Ui_MainWindow
 
 
-class Params_it():
-    def __init__(self):
-        self.it_IP='10.2.60.38'
-        self.PC_IP='10.2.60.33'
-        self.FBGs=[[1,2,3]]
-        self.channels=[1]
-        self.gains_auto=[0,0,0,0]
-        self.gains_manual=[1,1,1,1]
-        self.thresholds=[3000,3000,3000,3000]
-        self.averaging_time_for_single_FBG_measurement=0.5
+
         
 class Params_recording():
     def __init__(self):      
@@ -57,7 +48,7 @@ class Params_recording():
 
 class Params():
     def __init__(self):
-        self.it=Params_it()
+        self.it=Params_int()
         self.record=Params_recording()
         
 
@@ -219,6 +210,8 @@ class MainWindow(ThreadedMainWindow):
             set_parameters(self.params.it,params)
             if self.it!=None:
                 self.set_gains()
+                
+
             
     def set_gains(self):
         for ch in range(self.it.channels):
@@ -269,8 +262,7 @@ class MainWindow(ThreadedMainWindow):
         if parameters_dialog.exec_() == QDialog.Accepted:
             params=get_widget_values(parameters_dialog)
             set_parameters(self.params.record,params)
-            if self.it!=None:
-                self.set_gains()
+
                 
     def plot_live_dynamics(self, pressed: bool):
         if pressed:
@@ -326,7 +318,7 @@ class MainWindow(ThreadedMainWindow):
             
             
     def recording(self):
-        FilePrefix=self.ui.lineEdit_file_name.text()
+        FilePrefix=self.ui.lineEdit_file_name_for_recording.text()
         self.logText('start recording')
         
         if self.params.record.type_of_recording=='FBG peaks':
@@ -386,13 +378,6 @@ class MainWindow(ThreadedMainWindow):
         line = plt.gca().get_lines()[0]
         waves = line.get_xdata()
         signal = line.get_ydata()
-        # print(waves,signal)
-        # wave_min, wave_max = plt.gca().get_xlim()
-        # index_min = np.argmin(abs(waves-wave_min))
-        # index_max = np.argmin(abs(waves-wave_max))
-        # signal = signal[index_min:index_max]
-        # waves = waves[index_min:index_max]
-        # print(waves,signal)
         with open(self.saving_dir_path+'\\'+ self.ui.lineEdit_file_name_to_save_spectrum.text()+'.spectrum', "wb") as f:
             pickle.dump([waves,signal], f)
         self.logText('\nSpectrum saved\n')     

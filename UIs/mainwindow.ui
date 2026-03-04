@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>852</width>
+    <width>961</width>
     <height>749</height>
    </rect>
   </property>
@@ -24,7 +24,7 @@
      </rect>
     </property>
     <property name="currentIndex">
-     <number>0</number>
+     <number>2</number>
     </property>
     <widget class="QWidget" name="page">
      <property name="geometry">
@@ -213,7 +213,7 @@
        <string>Start recording</string>
       </property>
      </widget>
-     <widget class="QLineEdit" name="lineEdit_file_name">
+     <widget class="QLineEdit" name="lineEdit_file_name_for_recording">
       <property name="geometry">
        <rect>
         <x>370</x>
@@ -389,7 +389,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>852</width>
+     <width>961</width>
      <height>21</height>
     </rect>
    </property>
