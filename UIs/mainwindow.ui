@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>961</width>
+    <width>852</width>
     <height>749</height>
    </rect>
   </property>
@@ -24,7 +24,7 @@
      </rect>
     </property>
     <property name="currentIndex">
-     <number>2</number>
+     <number>0</number>
     </property>
     <widget class="QWidget" name="page">
      <property name="geometry">
@@ -32,7 +32,7 @@
        <x>0</x>
        <y>0</y>
        <width>821</width>
-       <height>213</height>
+       <height>197</height>
       </rect>
      </property>
      <attribute name="label">
@@ -99,8 +99,8 @@
       <rect>
        <x>0</x>
        <y>0</y>
-       <width>821</width>
-       <height>213</height>
+       <width>98</width>
+       <height>28</height>
       </rect>
      </property>
      <attribute name="label">
@@ -194,7 +194,7 @@
        <x>0</x>
        <y>0</y>
        <width>821</width>
-       <height>213</height>
+       <height>197</height>
       </rect>
      </property>
      <attribute name="label">
@@ -290,8 +290,8 @@
       <rect>
        <x>0</x>
        <y>0</y>
-       <width>821</width>
-       <height>213</height>
+       <width>98</width>
+       <height>28</height>
       </rect>
      </property>
      <attribute name="label">
@@ -389,8 +389,8 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>961</width>
-     <height>21</height>
+     <width>852</width>
+     <height>26</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuTools">

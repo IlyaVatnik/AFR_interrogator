@@ -1,10 +1,10 @@
 
-from UIs.MainWindowInterrogator import MainWindow
+from MainWindow import MainWindow
 from PyQt5 import QtWidgets
 from packaging import version
 import sys
-__version__ = '1.5.0'
-__date__ = '2026.02.27'
+__version__ = '1.5.1'
+__date__ = '2026.03.05'
 
 
 # from conda import __version__ as condaVersion
