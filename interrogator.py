@@ -7,8 +7,8 @@ Created on Fri Oct 17 14:19:23 2025
 
 For the AFR Arcadia Optronix Interrogator
 """
-__version__='1.7.0'
-__date__='2026.03.04'
+__version__='1.8.0'
+__date__='2026.03.17'
 
 
 import socket
@@ -37,6 +37,7 @@ class Params_int():
         self.thresholds=[3000,3000,3000,3000]
         self.averaging_time_for_single_FBG_measurement=0.5
         self.rep_rate=2000
+        self.max_wl_jump_nm=0.5 # might be None
 
 class InterrogatorError(RuntimeError):
     pass
@@ -514,7 +515,7 @@ class Interrogator:
                 average_time=self.params.averaging_time_for_single_FBG_measurement
             while time.time()-time0<average_time:
                 FBGs_list.append(self.get_single_FBG_measurement())
-            wavelengths_FBGs=average_FBG_measurements(FBGs_list)
+            wavelengths_FBGs=average_FBG_measurements(FBGs_list,max_jump_nm=self.params.max_wl_jump_nm)
             return wavelengths_FBGs
         except Exception as e:
             print(str(e))
@@ -936,38 +937,95 @@ class Interrogator:
     '''
     '''
  
-def average_FBG_measurements(data):
-    
-    
-    num_lists = len(data)
-    max_length = len(data[0])  # Количество подсписков
-    
-    # Создаем списки для сумм и счетчиков
-    sums = [[] for _ in range(max_length)]
-    counts = [[] for _ in range(max_length)]
-    
-    # Обрабатываем каждый входной список
-    for lst in data:
-        for i, inner in enumerate(lst):
-            # Если подсписок не пустой, добавляем элементы в sums и counts
-            if inner:
-                # Инициализируем sums и counts для этого подсписка
-                if len(sums[i]) == 0:
-                    sums[i] = [0] * len(inner)  # Инициализация массива сумм
-                    counts[i] = [0] * len(inner)  # Инициализация массива счетчиков
-                
-                for j, value in enumerate(inner):
-                    sums[i][j] += value
-                    counts[i][j] += 1
-    
-    # Формируем средние значения
-    averages = []
-    for i in range(max_length):
-        if counts[i]:  # Проверяем, что есть счетчики для этого подсписка
-            avg = [sums[i][j] / counts[i][j] if counts[i][j] > 0 else np.nan for j in range(len(sums[i]))]
-            averages.append(avg)
+def average_FBG_measurements(data, max_jump_nm: float = 0.05):
+    '''
+    Усреднение списка измерений FBG.
+
+    Фильтрация в рамках ОДНОГО вызова:
+      - для каждого [channel][fbg] хранится предыдущее ПРИНЯТОЕ значение
+      - если abs(cur - prev) > max_jump_nm -> cur не участвует в усреднении
+      - prev при этом НЕ обновляется (выброс не становится опорной точкой)
+      - NaN/None/нечисловые игнорируются
+
+    data: List[measurement]
+      measurement = List[channel]
+      channel = List[wavelength_nm]
+
+    return: List[channel] -> List[avg_wavelength_nm] (np.nan если валидных значений не было)
+    '''
+    import numpy as np
+    import math
+
+    if not data:
+        return []
+
+    max_channels = len(data[0])
+
+    sums = [[] for _ in range(max_channels)]
+    counts = [[] for _ in range(max_channels)]
+
+    # предыдущее принятое значение по каждому [ch][fbg] (локально на вызов)
+    prev_vals = [[] for _ in range(max_channels)]
+    prev_set = [[] for _ in range(max_channels)]
+
+    thr = None
+    if max_jump_nm is not None:
+        try:
+            thr = float(max_jump_nm)
+        except Exception:
+            thr = None
+    if thr is not None and thr <= 0:
+        thr = None  # фильтр отключён
+
+    def _ensure_len(ch: int, n_fbg: int):
+        if len(sums[ch]) == 0:
+            sums[ch] = [0.0] * n_fbg
+            counts[ch] = [0] * n_fbg
+            prev_vals[ch] = [np.nan] * n_fbg
+            prev_set[ch] = [False] * n_fbg
         else:
-            averages.append([])  # Если нет счетчиков, добавляем пустой список
+            cur = len(sums[ch])
+            if n_fbg > cur:
+                sums[ch].extend([0.0] * (n_fbg - cur))
+                counts[ch].extend([0] * (n_fbg - cur))
+                prev_vals[ch].extend([np.nan] * (n_fbg - cur))
+                prev_set[ch].extend([False] * (n_fbg - cur))
+
+    for meas in data:
+        for ch, inner in enumerate(meas):
+            if not inner:
+                continue
+
+            _ensure_len(ch, len(inner))
+
+            for j, value in enumerate(inner):
+                try:
+                    v = float(value)
+                except Exception:
+                    continue
+                if not math.isfinite(v):
+                    continue
+
+                if thr is not None and prev_set[ch][j]:
+                    prev = prev_vals[ch][j]
+                    if math.isfinite(prev) and abs(v - prev) > thr:
+                        # выброс: не учитываем и prev не обновляем
+                        continue
+
+                sums[ch][j] += v
+                counts[ch][j] += 1
+                prev_vals[ch][j] = v
+                prev_set[ch][j] = True
+
+    averages = []
+    for ch in range(max_channels):
+        if counts[ch]:
+            averages.append([
+                (sums[ch][j] / counts[ch][j]) if counts[ch][j] > 0 else np.nan
+                for j in range(len(sums[ch]))
+            ])
+        else:
+            averages.append([])
 
     return averages
 
