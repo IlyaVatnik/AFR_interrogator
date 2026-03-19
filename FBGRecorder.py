@@ -17,8 +17,8 @@ FBGrecorder.py — безопасная безголовая запись пот
 Live-плот: live_plot_wavelengths(it, channel, fbg_indices, ...) — запускайте из главного потока GUI.
 """
 
-__version__ = '1.8'
-__date__ = '2026.03.17'
+__version__ = '1.8.1'
+__date__ = '2026.03.19'
 
 import os
 import struct
@@ -1201,8 +1201,8 @@ def live_plot_wavelengths(it,
 
     if use_subplots:
         n = max(1, len(fbg_indices))
-        fig_h = max(3.0, 1.6 * n)
-        fig, axes = plt.subplots(n, 1, sharex=True, figsize=(9, fig_h))
+        fig_h = max(3.0, 3 * n)
+        fig, axes = plt.subplots(n, 1, sharex=True, figsize=(14, fig_h))
         axes_list = [axes] if n == 1 else list(np.ravel(axes))
 
         fig.suptitle(title or f"Channel {channel}")

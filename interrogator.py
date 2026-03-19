@@ -7,8 +7,8 @@ Created on Fri Oct 17 14:19:23 2025
 
 For the AFR Arcadia Optronix Interrogator
 """
-__version__='1.8.0'
-__date__='2026.03.17'
+__version__='1.8.1'
+__date__='2026.03.19'
 
 
 import socket
@@ -26,18 +26,18 @@ import math
 Лазер интеррогатора светит 1.2 мВт (12.11.2025, 4 канал)
 '''
 
-class Params_int():
+class Params_interrogator():
     def __init__(self):
         self.it_IP='10.2.60.38'
         self.PC_IP='10.2.60.33'
         self.FBGs=[[1,2,3]]
         self.channels=[1]
         self.gains_auto=[0,0,0,0]
-        self.gains_manual=[1,1,1,1]
+        self.gains_manual=[0,1,1,1]
         self.thresholds=[3000,3000,3000,3000]
         self.averaging_time_for_single_FBG_measurement=0.5
         self.rep_rate=2000
-        self.max_wl_jump_nm=0.5 # might be None
+        self.max_wl_jump_nm=0.5 # might be None, max allowed jump of the FBG peak from meas to meas
 
 class InterrogatorError(RuntimeError):
     pass
@@ -85,26 +85,25 @@ class Interrogator:
 
     def __init__(self, ip,
                  pc_ip,
-                 cfg: InterrogatorUDPConfig = InterrogatorUDPConfig(),
-                 params: Params_int=Params_int()):
+                 params: Params_interrogator=Params_interrogator()):
         self.module_ip=ip
-        self.cfg = cfg
+        self.cfg = InterrogatorUDPConfig()
         self.params=params
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         # Просим у ОС большой буфер приёма, чтобы не терять пакеты при пиковой нагрузке
         try:
-            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, cfg.recv_buf_size)
+            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, self.cfg.recv_buf_size)
         except Exception:
             pass
-        self._sock.bind((pc_ip, cfg.pc_bind_port))
-        self._sock.settimeout(cfg.recv_timeout)
+        self._sock.bind((pc_ip, self.cfg.pc_bind_port))
+        self._sock.settimeout(self.cfg.recv_timeout)
 
         # Поток и флаг остановки для приёма рабочего потока 0x30 0x02
         self._rx_thread: Optional[threading.Thread] = None
         self._rx_stop = threading.Event()
 
         # Кольцевой буфер для частотных кадров и «последний» кадр
-        self._ring = deque(maxlen=cfg.ring_size)
+        self._ring = deque(maxlen=self.cfg.ring_size)
         self._ring_lock = threading.Lock()
         self._latest_freq_frame: Optional[dict] = None
 
@@ -126,9 +125,6 @@ class Interrogator:
         self.sweep_direction_decreasing: Optional[bool] = None  # True, если свип идёт в сторону убывания частоты
         self.waves=None # массив длин волн, на которых измеряется спектр при текущей конфигурации свипа
         
-        self.thresholds=np.nan*np.zeros(self.channels)
-        self.gains_auto=False*np.zeros(self.channels)
-        self.gains_manual=0*np.zeros(self.channels)
 
         
         # При инициализации отправим STOP, чтобы модуль прекратил поток, если он был включён ранее
@@ -378,7 +374,7 @@ class Interrogator:
         # нумерация канала с первого
         # Команда: 0x20 0x02 0x06  Ch(0-based)  ThrHi ThrLo
         # Порог 0..65535, 65535 обычно трактуется как «auto»
-        self.thresholds[channel-1]=threshold
+        self.params.thresholds[channel-1]=threshold
         if channel < 1 or channel > 16:
             raise ValueError("Channel must be 1..16")
         if not (0 <= threshold <= 65535):
@@ -392,15 +388,15 @@ class Interrogator:
     
 
     def get_log_threshold(self,ch):
-        return 10*np.log10(self.gain_value(self.gains_manual[ch-1]))+10*np.log10(self.thresholds[ch-1])
+        return 10*np.log10(self.gain_value(self.params.gains_manual[ch-1]))+10*np.log10(self.params.thresholds[ch-1])
 
     def set_gain(self, channel: int, auto: bool = True, manual_level: int = 0, timeout: float = 1.0) -> bool:
         # Команда: 0x20 0x03 0x06  Ch(0-based)  GainHi GainLo
         # Кодирование (по наблюдениям):
         #   auto=True  → Gain = 0x00LL (MSB=0), LL игнорируется прошивкой
         #   auto=False → Gain = 0x80LL (MSB=1), LL=manual_level (0..5)
-        self.gains_manual[channel-1]=manual_level
-        self.gains_auto[channel-1]=auto
+        self.params.gains_manual[channel-1]=manual_level
+        self.params.gains_auto[channel-1]=auto
         if channel < 1 or channel > 16:
             raise ValueError("Channel must be 1..16")
         if not (0 <= manual_level <= 5):
@@ -414,6 +410,11 @@ class Interrogator:
         self._send(payload)
         data = self._recv_datagram(timeout)
         return self._is_success_reply(data, self.ID_CONFIG, self.FC_SET_GAIN)
+    
+    def set_gains(self):
+        for ch in range(self.channels):
+            self.set_gain(ch+1, auto=int(self.params.gains_auto[ch]), manual_level=int(self.params.gains_manual[ch]))
+            self.set_threshold(ch+1, int(self.params.thresholds[ch]))
 
     def set_peak_interval(self, ghz: int, timeout: float = 1.0) -> bool:
         # Команда: 0x20 0x04 0x04  Interval
