@@ -7,8 +7,8 @@ Created on Fri Oct 17 14:19:23 2025
 
 For the AFR Arcadia Optronix Interrogator
 """
-__version__='1.8.1'
-__date__='2026.03.19'
+__version__='1.9.0'
+__date__='2026.03.24'
 
 
 import socket
@@ -937,22 +937,22 @@ class Interrogator:
         return mapping[gain]
     '''
     '''
- 
 def average_FBG_measurements(data, max_jump_nm: float = 0.05):
     '''
     Усреднение списка измерений FBG.
 
-    Фильтрация в рамках ОДНОГО вызова:
-      - для каждого [channel][fbg] хранится предыдущее ПРИНЯТОЕ значение
-      - если abs(cur - prev) > max_jump_nm -> cur не участвует в усреднении
-      - prev при этом НЕ обновляется (выброс не становится опорной точкой)
-      - NaN/None/нечисловые игнорируются
+    NEW: фильтрация выбросов относительно МЕДИАНЫ по серии (в рамках одного вызова):
+      - для каждого [channel][fbg] собираем все валидные значения
+      - median = np.median(values)
+      - оставляем только те, где abs(v - median) <= max_jump_nm
+      - возвращаем среднее по оставшимся
+      - если после фильтрации ничего не осталось -> np.nan
 
     data: List[measurement]
       measurement = List[channel]
       channel = List[wavelength_nm]
 
-    return: List[channel] -> List[avg_wavelength_nm] (np.nan если валидных значений не было)
+    return: List[channel] -> List[avg_wavelength_nm]
     '''
     import numpy as np
     import math
@@ -962,13 +962,7 @@ def average_FBG_measurements(data, max_jump_nm: float = 0.05):
 
     max_channels = len(data[0])
 
-    sums = [[] for _ in range(max_channels)]
-    counts = [[] for _ in range(max_channels)]
-
-    # предыдущее принятое значение по каждому [ch][fbg] (локально на вызов)
-    prev_vals = [[] for _ in range(max_channels)]
-    prev_set = [[] for _ in range(max_channels)]
-
+    # нормализуем порог
     thr = None
     if max_jump_nm is not None:
         try:
@@ -978,26 +972,21 @@ def average_FBG_measurements(data, max_jump_nm: float = 0.05):
     if thr is not None and thr <= 0:
         thr = None  # фильтр отключён
 
-    def _ensure_len(ch: int, n_fbg: int):
-        if len(sums[ch]) == 0:
-            sums[ch] = [0.0] * n_fbg
-            counts[ch] = [0] * n_fbg
-            prev_vals[ch] = [np.nan] * n_fbg
-            prev_set[ch] = [False] * n_fbg
+    def _ensure_len(mat, ch: int, n_fbg: int):
+        if len(mat[ch]) == 0:
+            mat[ch] = [[] for _ in range(n_fbg)]
         else:
-            cur = len(sums[ch])
+            cur = len(mat[ch])
             if n_fbg > cur:
-                sums[ch].extend([0.0] * (n_fbg - cur))
-                counts[ch].extend([0] * (n_fbg - cur))
-                prev_vals[ch].extend([np.nan] * (n_fbg - cur))
-                prev_set[ch].extend([False] * (n_fbg - cur))
+                mat[ch].extend([[] for _ in range(n_fbg - cur)])
 
+    # 1) Собрать все значения в списки values[ch][fbg] = [v1, v2, ...]
+    values = [[] for _ in range(max_channels)]
     for meas in data:
         for ch, inner in enumerate(meas):
             if not inner:
                 continue
-
-            _ensure_len(ch, len(inner))
+            _ensure_len(values, ch, len(inner))
 
             for j, value in enumerate(inner):
                 try:
@@ -1006,29 +995,59 @@ def average_FBG_measurements(data, max_jump_nm: float = 0.05):
                     continue
                 if not math.isfinite(v):
                     continue
+                values[ch][j].append(v)
 
-                if thr is not None and prev_set[ch][j]:
-                    prev = prev_vals[ch][j]
-                    if math.isfinite(prev) and abs(v - prev) > thr:
-                        # выброс: не учитываем и prev не обновляем
-                        continue
-
-                sums[ch][j] += v
-                counts[ch][j] += 1
-                prev_vals[ch][j] = v
-                prev_set[ch][j] = True
-
-    averages = []
+    # 2) Посчитать медианы
+    med = [[] for _ in range(max_channels)]
     for ch in range(max_channels):
-        if counts[ch]:
-            averages.append([
-                (sums[ch][j] / counts[ch][j]) if counts[ch][j] > 0 else np.nan
-                for j in range(len(sums[ch]))
-            ])
-        else:
-            averages.append([])
+        if not values[ch]:
+            med[ch] = []
+            continue
 
-    return averages
+        med[ch] = []
+        for j in range(len(values[ch])):
+            if values[ch][j]:
+                med[ch].append(float(np.median(values[ch][j])))
+            else:
+                med[ch].append(np.nan)
+
+    # Если фильтрация отключена — вернём просто среднее по всем значениям
+    if thr is None:
+        out = []
+        for ch in range(max_channels):
+            if not values[ch]:
+                out.append([])
+                continue
+            out.append([
+                (float(np.mean(values[ch][j])) if values[ch][j] else np.nan)
+                for j in range(len(values[ch]))
+            ])
+        return out
+
+    # 3) Отфильтровать относительно медианы и посчитать среднее
+    out = []
+    for ch in range(max_channels):
+        if not values[ch]:
+            out.append([])
+            continue
+
+        row = []
+        for j in range(len(values[ch])):
+            m = med[ch][j]
+            if not math.isfinite(m) or not values[ch][j]:
+                row.append(np.nan)
+                continue
+
+            filtered = [v for v in values[ch][j] if abs(v - m) <= thr]
+            if filtered:
+                row.append(float(np.mean(filtered)))
+            else:
+                row.append(np.nan)
+
+        out.append(row)
+
+    return out
+
 
 
 #%%
