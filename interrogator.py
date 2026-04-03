@@ -37,7 +37,7 @@ class Params_interrogator():
         self.thresholds=[3000,3000,3000,3000]
         self.averaging_time_for_single_FBG_measurement=0.5
         self.rep_rate=2000
-        self.max_wl_jump_nm=0.5 # might be None, max allowed jump of the FBG peak from meas to meas
+        self.max_wl_jump_nm=2 # might be None, max allowed jump of the FBG peak from meas to meas
 
 class InterrogatorError(RuntimeError):
     pass
@@ -584,11 +584,11 @@ class Interrogator:
                     recv_cnt += 1
     
             # Периодический лог приёма — видеть «ямы»
-            now = _t.perf_counter()
-            if now - last_log >= 1.0:
-                print(f"RX fps ~ {recv_cnt/(now-last_log):.0f} pkt/s, ring={len(self._ring)}/{self.cfg.ring_size}")
-                recv_cnt = 0
-                last_log = now
+            # now = _t.perf_counter()
+            # if now - last_log >= 1.0:
+            #     print(f"RX fps ~ {recv_cnt/(now-last_log):.0f} pkt/s, ring={len(self._ring)}/{self.cfg.ring_size}")
+            #     recv_cnt = 0
+            #     last_log = now
     
     def _wait_for_packet(self, id_byte: int, fc_byte: int, timeout: float) -> Optional[bytes]:
         try:

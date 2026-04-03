@@ -266,10 +266,12 @@ class FrameFanout:
                         continue
 
                 wl = fr.get("wavelength_nm")
+
                 if wl is None:
                     continue
 
                 if self._is_jump_frame(wl):
+                    # print('false jump!')
                     continue
 
                 # обновляем prev_wl (копия)
@@ -1701,6 +1703,7 @@ def record_to_file_from_queue(it: Any,
 
             try:
                 item = q_rec.get(timeout=min(0.1, max(0.0, t_end - now)))
+ 
             except Empty:
                 if writing_active:
                     flush_batch()
