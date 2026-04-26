@@ -7,8 +7,8 @@ Created on Fri Oct 17 14:19:23 2025
 
 For the AFR Arcadia Optronix Interrogator
 """
-__version__='1.9.0'
-__date__='2026.03.24'
+__version__='1.9.1'
+__date__='2026.04.26'
 
 
 import socket
@@ -491,7 +491,7 @@ class Interrogator:
                temp.append(wavelengths)
            return fr['timestamp'], temp 
                
-    def get_single_FBG_measurement(self, timeout: float = 0.1):
+    def get_single_FBG_measurement(self, timeout: float = 0.2):
         try:
             self._send(bytes([self.ID_WORK, self.FC_DEBUG, 0x06, 0x00, 0x00, 0x00]))
         
@@ -501,7 +501,6 @@ class Interrogator:
             freq_frame = self._parse_freq_frame(freq_raw)
             wavelengths_FBGs=freq_frame['wavelength_nm']
             wavelengths_FBGs=[[x for x in row if not np.isnan(x)] for row in wavelengths_FBGs]
-            
             return wavelengths_FBGs
         except Exception as e:
             string='Problem in get_single_FBG_measurement: '+str(e)
@@ -515,7 +514,10 @@ class Interrogator:
             if average_time==None:
                 average_time=self.params.averaging_time_for_single_FBG_measurement
             while time.time()-time0<average_time:
-                FBGs_list.append(self.get_single_FBG_measurement())
+                try:
+                    FBGs_list.append(self.get_single_FBG_measurement())
+                except InterrogatorError:
+                    continue
             wavelengths_FBGs=average_FBG_measurements(FBGs_list,max_jump_nm=self.params.max_wl_jump_nm)
             return wavelengths_FBGs
         except Exception as e:
