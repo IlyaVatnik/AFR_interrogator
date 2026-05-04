@@ -17,8 +17,8 @@ FBGrecorder.py — безопасная безголовая запись пот
 Live-плот: live_plot_wavelengths(it, channel, fbg_indices, ...) — запускайте из главного потока GUI.
 """
 
-__version__ = '1.8.1'
-__date__ = '2026.03.19'
+__version__ = '1.9.0'
+__date__ = '2026.05.04'
 
 import os
 import struct
@@ -207,6 +207,7 @@ class FrameFanout:
         self._lock = threading.Lock()
 
         self._prev_wl: Optional[List[List[float]]] = None
+        self.threshold = getattr(getattr(self.it, "params", None), "max_wl_jump_nm", None)
 
     def add_consumer_queue(self, q: "Queue[Tuple[float, float, int, List[List[float]]]]"):
         with self._lock:
@@ -217,8 +218,8 @@ class FrameFanout:
             self._queues = [qq for qq in self._queues if qq is not q]
 
     def _is_jump_frame(self, wl_cur: Any) -> bool:
-        thr = getattr(getattr(self.it, "params", None), "max_wl_jump_nm", None)
-        if thr is None or thr <= 0:
+        
+        if self.threshold is None or self.threshold <= 0:
             return False
 
         prev = self._prev_wl
@@ -243,7 +244,7 @@ class FrameFanout:
                     continue
                 if a != a or b != b:  # NaN
                     continue
-                if abs(b - a) > thr:
+                if abs(b - a) > self.threshold:
                     return True
         return False
 
@@ -271,7 +272,7 @@ class FrameFanout:
                     continue
 
                 if self._is_jump_frame(wl):
-                    # print('false jump!')
+                    print('false jump!')
                     continue
 
                 # обновляем prev_wl (копия)
@@ -581,7 +582,7 @@ def record_to_file(it: Any,
     """
 
     batch_size = 1000
-    queue_max = 50000
+    queue_max = 20000
     fsync_every_batches = 20
     idle_sleep_empty_ring = 0.0002
     start_delay_sec = 0.5
@@ -1638,8 +1639,8 @@ def record_to_file_from_queue(it: Any,
                               other_params: Optional[Dict] = None,
                               warmup_sec: float = 1.0,
                               drop_during_warmup: bool = True,
-                              batch_size: int = 1000,
-                              fsync_every_batches: int = 20) -> Dict[str, Any]:
+                              batch_size: int = 100,
+                              fsync_every_batches: int = 10) -> Dict[str, Any]:
     """
     Пишет .fbgs из очереди кадров q_rec, которую наполняет FrameFanout.
 

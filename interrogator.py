@@ -453,7 +453,9 @@ class Interrogator:
     
         return ok
 
-    def start_freq_stream(self, acq_rate=2000):
+    def start_freq_stream(self, acq_rate=None):
+        if acq_rate==None:
+            acq_rate=self.params.rep_rate
         # Команда запуска потока частот: 0x30 0x02 0x06  X1 X2 0x00
         # После неё модуль начинает циклически слать пакеты 0x30 0x02.
         sweep_speed_code=self.sweep_speed_code(acq_rate)

@@ -209,7 +209,9 @@ if __name__ == "__main__":
 #%%
 
     # it.set_settings(src_ip='10.2.60.38',dst_ip='10.2.60.126')
-    it.set_settings(src_ip='10.2.15.150',dst_ip='10.2.15.158')
+    # it.set_settings(src_ip='192.168.0.2',dst_ip='192.168.0.1')
+    it.set_settings(src_ip='10.2.15.150',dst_ip='10.2.15.164')
+    # it.set_settings(src_ip='10.2.15.150',dst_ip='10.2.15.171')
     #%%
     settings=it.query_settings()
     print(settings)
