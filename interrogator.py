@@ -131,8 +131,10 @@ class Interrogator:
         self.stop_freq_stream()
         
         self._rx_queue = deque()
-        
-        self.update_waves()
+        try:
+            self.update_waves()
+        except Exception as e:
+            print(str(e))
 
     def __del__(self):
        # Никакой логики кроме попытки безопасного закрытия
@@ -1059,7 +1061,8 @@ def average_FBG_measurements(data, max_jump_nm: float = 0.05):
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
-    it = Interrogator('10.2.15.150','10.2.15.158')
+    # it = Interrogator('10.2.15.150','10.2.15.158')
+    it = Interrogator('10.2.60.38','10.2.60.235')
     #%%
     # waves=it.get_waves()
    
@@ -1148,7 +1151,7 @@ if __name__ == "__main__":
     # plt.ylabel('Spectral power, dBm')
 #%%
     # Запуск потока частот, чтение одного кадра и быстрый доступ к данным
-    # it.start_freq_stream()
+    it.start_freq_stream()
     # time.sleep(0.2)
     # fr=it.pop_freq_frame()
     # time_stamp,data=it.get_data()

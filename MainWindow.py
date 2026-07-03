@@ -28,7 +28,7 @@ from FBGRecorder import (
     start_live_plot_session,  # NEW
     record_spectra_to_file, read_spectra_from_file
 )
-from interrogator import Interrogator, average_FBG_measurements,Params_int
+from interrogator import Interrogator, average_FBG_measurements,Params_interrogator
 
 
 
@@ -48,7 +48,7 @@ class Params_recording():
 
 class Params():
     def __init__(self):
-        self.it=Params_int()
+        self.it=Params_interrogator()
         self.record=Params_recording()
         
 

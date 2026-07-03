@@ -5,6 +5,7 @@ Created on Tue Oct 28 11:31:22 2025
 @author: Илья
 """
 
+#import serial
 import serial
 import time
 from typing import Optional, Dict, Any
@@ -201,16 +202,17 @@ class AFRConfiguratorRS232:
         return ok
    #%%
 if __name__ == "__main__":
-    it=AFRConfiguratorRS232('COM5')
+    it=AFRConfiguratorRS232('COM8')
     #%%
     settings=it.query_settings()
     print(settings)
 
 #%%
 
-    # it.set_settings(src_ip='10.2.60.38',dst_ip='10.2.60.126')
+    it.set_settings(src_ip='10.2.60.38',dst_ip='10.2.60.235')
+    # it.set_settings(src_ip='10.2.60.38',dst_ip='10.2.60.141')
     # it.set_settings(src_ip='192.168.0.2',dst_ip='192.168.0.1')
-    it.set_settings(src_ip='10.2.15.150',dst_ip='10.2.15.164')
+    # it.set_settings(src_ip='10.2.15.150',dst_ip='10.2.15.164')
     # it.set_settings(src_ip='10.2.15.150',dst_ip='10.2.15.171')
     #%%
     settings=it.query_settings()
