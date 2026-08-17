@@ -8,10 +8,14 @@ Created on Tue Oct 28 11:31:22 2025
 #import serial
 import serial
 import time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any,Tuple
 
-__version__='1.1'
-__date__='30.10.2025'
+from serial.tools import list_ports
+
+
+
+__version__='1.2'
+__date__='2026.08.14'
 
 
 def ip_to_bytes(ip: str) -> bytes:
@@ -196,13 +200,101 @@ class AFRConfiguratorRS232:
         
         
         fr=bytes([0x20,0x01,0x16])+ip_to_bytes(src_ip)+src_port.to_bytes(2)+ip_to_bytes(dst_ip)+dst_port.to_bytes(2) + mac_to_bytes(mac)
-        
-        ok = self._send_set_and_wait_ack(fr)
+        ok=False
+        t0=time.time()
+        while not ok and time.time()-t0<4:
+            ok = self._send_set_and_wait_ack(fr)
         
         return ok
+    
+    
+
+
+def find_afr_interrogator_port(
+    baudrates: Tuple[int, ...] = (9600, 115200),
+    timeout: float = 0.3,
+    wait_total: float = 0.6,
+    verbose: bool = True,
+) -> Optional[str]:
+    """
+    Автоматически ищет COM-порт, к которому подключен AFR Arcadia Optronix (GC-97001C),
+    пробуя выполнить Query и проверяя ответ.
+
+    Возвращает строку порта (например 'COM8') или None.
+    """
+
+    def looks_like_afr_query_response(buf: bytes) -> bool:
+        # В вашей реализации query_settings ожидается:
+        # buf[0]=0x10, buf[1]=0x01 и далее данные минимум до MAC (22 байта)
+        if not buf or len(buf) < 22:
+            return False
+        if buf[0] != 0x10 or buf[1] != 0x01:
+            return False
+
+        # дополнительная валидация "похоже на данные":
+        # IP октеты, порты, MAC должны быть в допустимых диапазонах (что всегда true для bytes),
+        # но можно отсеять совсем мусор по длине из поля total_len (если оно реально используется)
+        total_len = int.from_bytes(buf[2:4], "big")
+        # total_len в вашем парсинге не используется, но можно проверить адекватность
+        if total_len == 0 or total_len > 2048:
+            return False
+
+        return True
+
+    ports = list(list_ports.comports())
+    # Небольшая эвристика: сначала порты, где есть USB/VID/PID/описание
+    ports_sorted = sorted(
+        ports,
+        key=lambda p: (p.vid is None and p.pid is None, p.device)
+    )
+
+    for p in ports_sorted:
+        for br in baudrates:
+            try:
+                if verbose:
+                    print(f"[SCAN] {p.device} @ {br} ...")
+                ser = serial.Serial(
+                    p.device,
+                    baudrate=br,
+                    timeout=timeout,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE,
+                )
+                try:
+                    ser.reset_input_buffer()
+                    ser.write(bytes([0x10, 0x01, 0x04, 0x00]))  # ваш Query
+                    ser.flush()
+
+                    t0 = time.time()
+                    buf_all = bytearray()
+                    while time.time() - t0 < wait_total:
+                        chunk = ser.read(256)
+                        if chunk:
+                            buf_all += chunk
+                            # иногда ответ может прийти не с нулевого байта буфера
+                            # поэтому проверим все возможные смещения
+                            for i in range(0, max(1, len(buf_all) - 21)):
+                                if looks_like_afr_query_response(buf_all[i:i+256]):
+                                    if verbose:
+                                        print(f"[FOUND] {p.device} @ {br}")
+                                    return p.device
+                    # не нашли сигнатуру — идём дальше
+                finally:
+                    ser.close()
+
+            except (serial.SerialException, OSError):
+                # порт занят/недоступен/ошибка открытия
+                continue
+
+    return None
    #%%
 if __name__ == "__main__":
-    it=AFRConfiguratorRS232('COM8')
+    port = find_afr_interrogator_port(verbose=True)
+    if not port:
+        raise RuntimeError("Интеррогатор AFR не найден ни на одном COM-порту")
+
+    it=AFRConfiguratorRS232(port)
     #%%
     settings=it.query_settings()
     print(settings)
