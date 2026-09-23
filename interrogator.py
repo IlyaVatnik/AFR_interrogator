@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 
 Created on Fri Oct 17 14:19:23 2025
@@ -7,8 +6,8 @@ Created on Fri Oct 17 14:19:23 2025
 
 For the AFR Arcadia Optronix Interrogator
 """
-__version__='1.9.1'
-__date__='2026.04.26'
+__version__='1.9.2'
+__date__='2026.09.23'
 
 
 import socket
@@ -51,7 +50,7 @@ class InterrogatorUDPConfig:
 
     # Размер сокетного буфера приёма (просим у ОС), ёмкость кольца и таймаут recv
     recv_buf_size: int = 16 * 1024 * 1024
-    ring_size: int = 2000
+    ring_size: int = 10000
     recv_timeout: float = 0.2  # seconds
 
 
@@ -86,6 +85,9 @@ class Interrogator:
     def __init__(self, ip,
                  pc_ip,
                  params: Params_interrogator=Params_interrogator()):
+        if pc_ip==None:
+            pc_ip = get_local_ip()
+            
         self.module_ip=ip
         self.cfg = InterrogatorUDPConfig()
         self.params=params
@@ -124,17 +126,17 @@ class Interrogator:
         self.ad_step_ghz: Optional[float] = None       # AD шаг сетки (между индексами)
         self.sweep_direction_decreasing: Optional[bool] = None  # True, если свип идёт в сторону убывания частоты
         self.waves=None # массив длин волн, на которых измеряется спектр при текущей конфигурации свипа
-        
+        self.update_waves()
 
         
         # При инициализации отправим STOP, чтобы модуль прекратил поток, если он был включён ранее
         self.stop_freq_stream()
         
         self._rx_queue = deque()
-        try:
-            self.update_waves()
-        except Exception as e:
-            print(str(e))
+        # try:
+
+        # except Exception as e:
+        #     print(str(e))
 
     def __del__(self):
        # Никакой логики кроме попытки безопасного закрытия
@@ -253,15 +255,13 @@ class Interrogator:
 
         # Таблица соответствия код скорости -> Гц (из мануала)
         sweep_speed_map = {
-            (0x00, 0x00): 1,
-            (0x00, 0x0A): 3,
-            (0x00, 0x1E): 100,
-            (0x00, 0x65): 200,
-            (0x00, 0xC9): 500,
-            (0x01, 0xF5): 1000,
-            (0x00, 0x66): 2000,
-            (0x00, 0xCA): 4000,
-            (0x01, 0x92): 8000,
+            (0x00, 0x0A): 1,
+            (0x00, 0x1E): 3,
+            (0x00, 0x65): 100,
+            (0x00, 0xC9): 200,
+            (0x01, 0xF5): 500,
+            (0x00, 0x66): 1000,
+            (0x00, 0xCA): 2000,
         }
         hz = sweep_speed_map.get((data[-8], data[-7]))
         return {
@@ -484,6 +484,14 @@ class Interrogator:
             if self._ring:
                 return self._ring.popleft()
             return None
+
+    def pop_freq_frames_batch(self, max_batch: int = 512) -> list:
+        """Извлечь до max_batch кадров за одно захватывание блокировки."""
+        with self._ring_lock:
+            n = min(len(self._ring), max_batch)
+            if n == 0:
+                return []
+            return [self._ring.popleft() for _ in range(n)]
         
     def get_data(self):
            # Упрощённый хелпер: возвращает (timestamp, список numpy-массивов длин волн по каналам),
@@ -717,134 +725,104 @@ class Interrogator:
 
     def _parse_freq_frame(self, data: bytes):
         """
-        Парсер кадра 0x30 0x02: Read FBG Frequency Data.
+        Парсер кадра 0x30 0x02 — numpy-батчинг для скорости.
 
-        Подтверждённый формат:
-          [0]   = 0x30 (ID_WORK)
-          [1]   = 0x02 (FC_READ_FREQ)
-          [2:6] = 4 байта резерва (игнорируются; наблюдались как 00 00 01 EE)
-
-          Далее по каналам подряд, без отдельного заголовка канала:
-            для fbg in range(self.fbg_per_ch):
-              [PeakID:1][Freq_u24_BE:3]
-            [Temp_u16_BE:2]  # температура канала —  2 байта
-
-        Интерпретация частоты:
-          - Freq_u24_BE — 24-битное беззнаковое big-endian значение.
-          - Единица измерения — 0.1 ГГц (десятые ГГц).
-          - Преобразования:
-              f_ghz = u24 / 10.0
-              lambda_nm = 299_792_458.0 / f_ghz
-
-        Пустые слоты FBG:
-          - Передаются как PeakID=N, Freq_u24=0x000000 — интерпретируем как «нет пика», ставим NaN.
-
+        Формат (см. мануал):
+          [0]=0x30  [1]=0x02  [2:6]=резерв
+          Для каждого канала:
+            fbg_per_ch × [PeakID:1][Freq_u24_BE:3]
+            [Temp_u16_BE:2]
         """
         try:
-            # Проверка заголовка и минимальной длины (ID/FC + 4B резерва)
-            ID_WORK = getattr(self, "ID_WORK", 0x30)
-            FC_READ_FREQ = getattr(self, "FC_READ_FREQ", 0x02)
+            ID_WORK = self.ID_WORK
+            FC_READ_FREQ = self.FC_READ_FREQ
             if len(data) < 6 or data[0] != ID_WORK or data[1] != FC_READ_FREQ:
                 return None
-    
+
             channels = self.channels
             fbg_per_ch = self.fbg_per_ch
             if channels <= 0 or fbg_per_ch <= 0:
                 return None
-    
-            # Константы и помощники
-            C_M_PER_S = 299_792_458.0  # м/с; λ[nm] = C / f[GHz]
-            def be_u24(b: bytes, off: int) -> int:
-                # Big-endian 24-bit: b[off] — старший байт
-                return (b[off] << 16) | (b[off + 1] << 8) | b[off + 2]
-            def to_i8(x: int) -> int:
-                # Вспомогательно: перевод беззнакового 8-битного в знаковый (если понадобится)
-                return x - 256 if x > 127 else x
-    
-            # Начальное смещение после заголовка и 4B резерва
-            o = 6  # пропускаем [0]=ID, [1]=FC и [2:6]=резерв
-    
-            # Готовим выходные структуры
-            peak_ids_all = []       # [ch][fbg] -> PeakID (0..255)
-            freqs_u24_all = []      # [ch][fbg] -> u24 (0..16_777_215)
-            freqs_ghz_all = []      # [ch][fbg] -> float GHz (или NaN)
-            lambdas_nm_all = []     # [ch][fbg] -> float nm (или NaN)
-            temps_raw = []          # [ch] -> u16 BE (масштаб в °C уточняется; обычно /100)
-            temps_i8 = []           # [ch] -> зарезервировано, для совместимости интерфейса
-    
-            # Оценим минимально необходимую длину (если пакет полный)
-            per_fbg_size = 4  # PeakID(1) + Freq_u24(3)
-            per_channel_min = fbg_per_ch * per_fbg_size + 2  # + Temp_u16_BE(2)
-            min_len = 6 + channels * per_channel_min
-            # Если пакет короче — не рвём парсинг, добиваем NaN/нулями.
-    
+
+            C_M_PER_S = 299_792_458.0
+            header_end = 6
+            fbg_size = fbg_per_ch * 4
+            ch_block = fbg_size + 2
+
+            peak_ids_all = []
+            freqs_u24_all = []
+            freqs_ghz_all = []
+            lambdas_nm_all = []
+            temps_raw = []
+            temps_i8 = []
+            valid_count = 0
+
+            data_len = len(data)
+
             for ch in range(channels):
-                ch_peak_ids, ch_u24, ch_f, ch_lam = [], [], [], []
-    
-                # FBG-блоки канала
-                for _ in range(fbg_per_ch):
-                    if o + 4 > len(data):
-                        # Не хватает данных — добиваем «пустышками»
-                        ch_peak_ids.append(0)
-                        ch_u24.append(0)
-                        ch_f.append(float("nan"))
-                        ch_lam.append(float("nan"))
-                        continue
-    
-                    peak_id = data[o]
-                    u24 = be_u24(data, o + 1)
-                    o += 4
-    
-                    ch_peak_ids.append(peak_id)
-                    ch_u24.append(u24)
-    
-                    if u24 == 0:
-                        ch_f.append(np.nan)
-                        ch_lam.append(np.nan)
-                    else:
-                        f_ghz = u24 / 10.0
-                        lam_nm = C_M_PER_S / f_ghz
-                        ch_f.append(f_ghz)
-                        ch_lam.append(lam_nm)
-    
-                # Температура канала: 2 байта u16 BE (ВАЖНО: раньше читали 1 байт — это было неверно)
-                if o + 2 <= len(data):
-                    t_raw = (data[o] << 8) | data[o + 1]
-                    o += 2
+                s = header_end + ch * ch_block
+                end_fbg = s + fbg_size
+
+                if s + 4 > data_len:
+                    peak_ids_all.append([0] * fbg_per_ch)
+                    freqs_u24_all.append([0] * fbg_per_ch)
+                    freqs_ghz_all.append([float("nan")] * fbg_per_ch)
+                    lambdas_nm_all.append([float("nan")] * fbg_per_ch)
                 else:
-                    t_raw = 0  # недостающие данные — ставим 0, чтобы сохранить тип
-    
-                peak_ids_all.append(ch_peak_ids)
-                freqs_u24_all.append(ch_u24)
-                freqs_ghz_all.append(ch_f)
-                lambdas_nm_all.append(ch_lam)
+                    actual_end = end_fbg if end_fbg <= data_len else data_len
+                    raw = np.frombuffer(data[s:actual_end], dtype='>u4')
+                    n = len(raw)
+
+                    peak_ids = (raw >> 24).astype(np.uint8)
+                    freqs_u24 = (raw & 0x00FFFFFF).astype(np.uint32)
+
+                    valid_mask = freqs_u24 != 0
+                    valid_count += int(valid_mask.sum())
+
+                    freqs_ghz = np.full(n, np.nan, dtype=np.float64)
+                    freqs_ghz[valid_mask] = freqs_u24[valid_mask].astype(np.float64) / 10.0
+
+                    lambdas = np.full(n, np.nan, dtype=np.float64)
+                    lambdas[valid_mask] = C_M_PER_S / freqs_ghz[valid_mask]
+
+                    if n < fbg_per_ch:
+                        pad_n = fbg_per_ch - n
+                        peak_ids = np.pad(peak_ids, (0, pad_n))
+                        freqs_u24 = np.pad(freqs_u24, (0, pad_n))
+                        freqs_ghz = np.concatenate([freqs_ghz, np.full(pad_n, np.nan)])
+                        lambdas = np.concatenate([lambdas, np.full(pad_n, np.nan)])
+
+                    peak_ids_all.append(peak_ids.tolist())
+                    freqs_u24_all.append(freqs_u24.tolist())
+                    freqs_ghz_all.append(freqs_ghz.tolist())
+                    lambdas_nm_all.append(lambdas.tolist())
+
+                t_off = end_fbg if s < data_len else -1
+                if 0 <= t_off and t_off + 2 <= data_len:
+                    t_raw = (data[t_off] << 8) | data[t_off + 1]
+                else:
+                    t_raw = 0
                 temps_raw.append(t_raw)
-                # temps_i8 здесь не имеет физического смысла; оставлен для совместимости структуры
-                temps_i8.append(to_i8(t_raw & 0xFF))
-    
-            # valid_ratio — доля валидных частот (конечные значения)
+                temps_i8.append(t_raw - 256 if t_raw > 127 else t_raw)
+
             total_points = channels * fbg_per_ch
-            valid_points = sum(
-                1 for row in freqs_ghz_all for x in row
-                if isinstance(x, (int, float)) and math.isfinite(x)
-            )
-            valid_ratio = (valid_points / total_points) if total_points else 0.0
-    
+            valid_ratio = (valid_count / total_points) if total_points else 0.0
+
             return {
                 "id": data[0],
                 "fc": data[1],
                 "channels": channels,
                 "fbg_per_channel": fbg_per_ch,
-    
-                "peak_id": peak_ids_all,          # [ch][fbg] PeakID
-                "freqs_u24_raw": freqs_u24_all,   # [ch][fbg] u24 из кадра (0.1 ГГц)
-                "freqs_ghz": freqs_ghz_all,       # [ch][fbg] f = u24/10.0
-                "wavelength_nm": lambdas_nm_all,  # [ch][fbg] λ = C/f
-    
-                "temps_raw_u8": temps_raw,        # [ch] u16 BE (масштаб -> °C по месту использования)
-                "temps_i8": temps_i8,             # [ch] зарезервировано (историческое поле)
-    
-                "sweep": None,            # в этом кадре sweep-параметров нет
+
+                "peak_id": peak_ids_all,
+                "freqs_u24_raw": freqs_u24_all,
+                "freqs_ghz": freqs_ghz_all,
+                "wavelength_nm": lambdas_nm_all,
+
+                "temps_raw_u8": temps_raw,
+                "temps_i8": temps_i8,
+
+                "sweep": None,
                 "offset": None,
                 "valid_ratio": valid_ratio,
                 "timestamp": time.time(),
@@ -908,20 +886,23 @@ class Interrogator:
     # ------------------- Утилита: карты скоростей -------------------
 
     @staticmethod
-    def sweep_speed_code(hz: int) -> Tuple[int, int]:
+    def sweep_speed_code(hz) -> Tuple[int, int]:
         # Таблица соответствия требуемой скорости свипа → код (из мануала, табл. 2.1.3/2.3.2)
         mapping = {
             1: (0x00, 0x0A),
-            3: (0x00, 0x0E),
+            3: (0x00, 0x1E),
             100: (0x00, 0x65),
             200: (0x00, 0xC9),
             500: (0x01, 0xF5),
             1000: (0x00, 0x66),
             2000: (0x00, 0xCA),
-            4000: (0x01, 0x92)
         }
+        try:
+            hz = int(hz)
+        except (TypeError, ValueError):
+            raise ValueError(f"Unsupported sweep speed: {hz!r}. Supported speeds are {sorted(mapping.keys())} Hz")
         if hz not in mapping:
-            raise ValueError(f"Unsupported sweep speed. Supported speeds are {mapping.keys()} Hz")
+            raise ValueError(f"Unsupported sweep speed. Supported speeds are {sorted(mapping.keys())} Hz")
         return mapping[hz]
     
     
@@ -1061,13 +1042,13 @@ def average_FBG_measurements(data, max_jump_nm: float = 0.05):
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
-    # it = Interrogator('10.2.15.150','10.2.15.158')
-    it = Interrogator('10.2.60.38','10.2.60.235')
+    it = Interrogator('10.2.15.150','10.2.15.164')
+    # it = Interrogator('10.2.60.38','10.2.60.235')
     #%%
-    # waves=it.get_waves()
+    waves=it.get_waves()
    
-    # spectrum=it.get_single_spectrum(1)
-    # plt.plot(waves,spectrum)
+    spectrum=it.get_single_spectrum(1)
+    plt.plot(waves,spectrum)
 #%%
     # Прочитать идентификацию и параметры
     
@@ -1181,4 +1162,16 @@ if __name__ == "__main__":
     #     plt.title('Channel {}'.format(ch))
 
    
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # Пытаемся "соединиться" с внутренней сетью, чтобы узнать свой рабочий IP
+        s.connect(('10.255.255.255', 1))
+        IP = s.getsockname()[0]
+    except Exception:
+        IP = '127.0.0.1'
+    finally:
+        s.close()
+    return IP
+
     
