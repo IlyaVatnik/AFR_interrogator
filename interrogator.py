@@ -74,6 +74,7 @@ class Interrogator:
     FC_SET_THRESHOLD = 0x02
     FC_SET_GAIN = 0x03
     FC_SET_PEAK_INTERVAL = 0x04
+    FC_SET_SWEEP_SPEED = 0x05
     FC_SAVE_THRESHOLD = 0x06
     # 2.3 Working
     FC_STOP = 0x01
@@ -108,6 +109,7 @@ class Interrogator:
         self._ring = deque(maxlen=self.cfg.ring_size)
         self._ring_lock = threading.Lock()
         self._latest_freq_frame: Optional[dict] = None
+        self.rx_fps: float = 0.0   # фактическая частота приёма кадров (кадров/с)
 
         # Пользовательские колбэки, вызываются на каждый принятый кадр
         self._callbacks: List[Callable[[dict], None]] = []
@@ -435,6 +437,19 @@ class Interrogator:
         # Команда без ответа: 0x20 0x06 0x04 0x00 — сохранение порогов во FLASH/EEPROM
         self._send(bytes([self.ID_CONFIG, self.FC_SAVE_THRESHOLD, 0x04, 0x00]))
 
+    def set_sweep_speed(self, hz, timeout: float = 1.0) -> bool:
+        # Команда установки скорости свипа отдельно от старта потока.
+        # Формат предположительный (функция 0x05 в группе 0x20, 2 байта кода
+        # скорости как в таблице из мануала); сверьте с документацией AFR.
+        code = self.sweep_speed_code(hz)
+        payload = bytes([self.ID_CONFIG, self.FC_SET_SWEEP_SPEED, 0x05, code[0], code[1]])
+        self._send(payload)
+        data = self._recv_datagram(timeout)
+        ok = self._is_success_reply(data, self.ID_CONFIG, self.FC_SET_SWEEP_SPEED)
+        if ok:
+            self.sweep_speed_hex = code
+        return ok
+
     def stop_freq_stream(self, timeout: float = 1.0) -> bool:
         cmd = bytes([self.ID_WORK, self.FC_STOP, 0x06, 0x00, 0x00, 0x00])
     
@@ -458,6 +473,8 @@ class Interrogator:
     def start_freq_stream(self, acq_rate=None):
         if acq_rate==None:
             acq_rate=self.params.rep_rate
+        # Сначала задаём скорость свипа отдельной командой конфигурации
+        self.set_sweep_speed(acq_rate)
         # Команда запуска потока частот: 0x30 0x02 0x06  X1 X2 0x00
         # После неё модуль начинает циклически слать пакеты 0x30 0x02.
         sweep_speed_code=self.sweep_speed_code(acq_rate)
@@ -537,7 +554,7 @@ class Interrogator:
             raise InterrogatorError(str(e))
 
 
-    def get_single_spectrum(self, channel: int, timeout: float = 0.01) -> dict:
+    def get_single_spectrum(self, channel: int, timeout: float = 0.5) -> dict:
         # Разовый запрос ADC по одному каналу (2.3.4).
         # channel =1..4
         if channel < 1 or channel > 16:
@@ -596,13 +613,13 @@ class Interrogator:
                             print("Callback error:", repr(e))
     
                     recv_cnt += 1
-    
-            # Периодический лог приёма — видеть «ямы»
-            # now = _t.perf_counter()
-            # if now - last_log >= 1.0:
-            #     print(f"RX fps ~ {recv_cnt/(now-last_log):.0f} pkt/s, ring={len(self._ring)}/{self.cfg.ring_size}")
-            #     recv_cnt = 0
-            #     last_log = now
+
+            # Периодически оцениваем фактическую частоту приёма кадров
+            now = _t.perf_counter()
+            if now - last_log >= 0.5:
+                self.rx_fps = recv_cnt / (now - last_log)
+                recv_cnt = 0
+                last_log = now
     
     def _wait_for_packet(self, id_byte: int, fc_byte: int, timeout: float) -> Optional[bytes]:
         try:
@@ -632,21 +649,22 @@ class Interrogator:
                 # Невалидный стартовый пакет
                 return None
         
-            # Шаг 2: определить ожидаемую полную длину кадра
-            # Пытаемся прочитать поле длины из заголовка (обычно little-endian в bytes[2:4]).
+            # Шаг 2: определить ожидаемую полную длину кадра.
+            # Для одиночного спектра размер ответа известен заранее и не зависит от
+            # поля длины в заголовке (которое на разных прошивках может быть
+            # little- или big-endian), поэтому используем его напрямую.
             expected_total_len = None
-            try:
-                total_len_field = int.from_bytes(first[2:4], 'little', signed=False)
-                # Если поле — длина полезной нагрузки, то полный кадр = header + payload_len
-                if total_len_field > 0:
-                    expected_total_len = header_len + total_len_field
-            except Exception:
-                pass
-        
-            # Фолбэк: для одиночного спектра знаем заранее размер полезной части
-            if expected_total_len is None and fc_byte == self.FC_READ_ADC_SINGLE:
+            if fc_byte == self.FC_READ_ADC_SINGLE:
                 # 2 байта канал + 2 байта усиление + 2551 точка по 2 байта = 5106 байт payload
                 expected_total_len = header_len + (2 + 2 + 2551 * 2)
+            else:
+                try:
+                    total_len_field = int.from_bytes(first[2:4], 'little', signed=False)
+                    # Если поле — длина полезной нагрузки, то полный кадр = header + payload_len
+                    if total_len_field > 0:
+                        expected_total_len = header_len + total_len_field
+                except Exception:
+                    pass
         
             # Если так и не удалось — будем просто собирать, пока не исчерпаем таймаут
             # Но лучше всегда иметь ожидаемую длину.
@@ -749,6 +767,12 @@ class Interrogator:
             fbg_size = fbg_per_ch * 4
             ch_block = fbg_size + 2
 
+            # Быстрый путь: пакет полный -> разбираем сразу все каналы одним
+            # проходом numpy (вместо ~10 numpy-вызовов на канал).
+            if len(data) >= header_end + channels * ch_block:
+                return self._parse_freq_frame_fast(data, channels, fbg_per_ch,
+                                                   header_end, fbg_size, ch_block)
+
             peak_ids_all = []
             freqs_u24_all = []
             freqs_ghz_all = []
@@ -831,7 +855,64 @@ class Interrogator:
         except Exception as e:
             print("parse_freq_frame(0x30,0x02) error:", repr(e), "len=", len(data))
             return None
-       
+
+    def _parse_freq_frame_fast(self, data: bytes, channels: int, fbg_per_ch: int,
+                               header_end: int, fbg_size: int, ch_block: int) -> dict:
+        """
+        Векторизованный разбор полного кадра 0x30 0x02 (все каналы за раз).
+
+        Результат совпадает с медленным путём в _parse_freq_frame (те же ключи и
+        значения), плюс дополнительное поле "wl_np" — float64-массив длин волн
+        формы (channels, fbg_per_ch). Его используют FrameFanout и live-плот,
+        чтобы не гонять Python-циклы по спискам.
+        """
+        C_M_PER_S = 299_792_458.0
+        total = header_end + channels * ch_block
+        buf = np.frombuffer(data, dtype=np.uint8, count=total)[header_end:].reshape(channels, ch_block)
+
+        # (channels, fbg_per_ch) uint32 big-endian: [PeakID:8][Freq_u24:24]
+        raw = np.ascontiguousarray(buf[:, :fbg_size]).view('>u4').astype(np.uint32)
+
+        peak_ids = (raw >> 24).astype(np.uint8)
+        freqs_u24 = raw & np.uint32(0x00FFFFFF)
+
+        valid_mask = freqs_u24 != 0
+        valid_count = int(np.count_nonzero(valid_mask))
+
+        freqs_ghz = np.full(raw.shape, np.nan, dtype=np.float64)
+        freqs_ghz[valid_mask] = freqs_u24[valid_mask].astype(np.float64) / 10.0
+
+        lambdas = np.full(raw.shape, np.nan, dtype=np.float64)
+        lambdas[valid_mask] = C_M_PER_S / freqs_ghz[valid_mask]
+
+        t_raw = (buf[:, fbg_size].astype(np.int64) << 8) | buf[:, fbg_size + 1].astype(np.int64)
+        temps_raw = t_raw.tolist()
+        temps_i8 = [v - 256 if v > 127 else v for v in temps_raw]
+
+        total_points = channels * fbg_per_ch
+        valid_ratio = (valid_count / total_points) if total_points else 0.0
+
+        return {
+            "id": data[0],
+            "fc": data[1],
+            "channels": channels,
+            "fbg_per_channel": fbg_per_ch,
+
+            "peak_id": peak_ids.tolist(),
+            "freqs_u24_raw": freqs_u24.tolist(),
+            "freqs_ghz": freqs_ghz.tolist(),
+            "wavelength_nm": lambdas.tolist(),
+            "wl_np": lambdas,
+
+            "temps_raw_u8": temps_raw,
+            "temps_i8": temps_i8,
+
+            "sweep": None,
+            "offset": None,
+            "valid_ratio": valid_ratio,
+            "timestamp": time.time(),
+        }
+
         
     def _parse_debug_frame(self, data: bytes) -> dict:
         # Формат 2.3.3 (по мануалу): 0x30 0x03 ... затем по каналу:
@@ -877,9 +958,11 @@ class Interrogator:
         payload=data[10:]
         # little-endian 16-бит беззнаковый
         # spectrum = np.frombuffer(payload, dtype='<u2')  # shape: (len(payload)//2,)
-        u16 = np.frombuffer(payload, dtype='>u2')  # big-endian без копии
+        u16 = np.frombuffer(payload, dtype='>u2').astype(np.float64)  # big-endian
         
-        spectrum =10*np.log10(self.gain_value(gain)) + 10*np.log10(u16)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            spectrum = 10*np.log10(self.gain_value(gain)) + 10*np.log10(u16)
+        spectrum[~np.isfinite(spectrum)] = np.nan
         
         return ch_no,gain,spectrum
 

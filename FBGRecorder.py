@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-FBGrecorder.py — безопасная безголовая запись потока FBG в файл и live-плот.
+FBGrecorder.py — безопасная безголовая запись потока FBG в файл и live-плот
+(интерактивные окна PyQt5/pyqtgraph, см. live_plot_qt.py).
 
 Формат файла:
   - header (pickle: dict)
@@ -14,11 +15,12 @@ FBGrecorder.py — безопасная безголовая запись пот
     где batch = List[Tuple[float ts_perf, float ts_unix, int pkt_ctr, List[List[float]]]]
 
 Чтение: read_fbg_stream_raw_lp(filepath) — устойчиво к оборванному хвосту.
-Live-плот: live_plot_wavelengths(it, channel, fbg_indices, ...) — запускайте из главного потока GUI.
+Live-плот: live_plot_wavelengths(it, channel, fbg_indices, ...) — запускайте из главного потока GUI
+(нужен созданный QApplication).
 """
 
-__version__ = '2.2.2'
-__date__ = '2026.09.22'
+__version__ = '3.0.0'
+__date__ = '2026.10.27'
 
 import os
 import struct
@@ -27,7 +29,6 @@ import time
 from dataclasses import dataclass, field
 from queue import Queue, Empty
 from typing import Any, Callable, Dict, List, Optional, Tuple, Iterable
-from matplotlib.animation import FuncAnimation
 import numpy as np
 from pathlib import Path
 
@@ -207,6 +208,7 @@ class FrameFanout:
         self._lock = threading.Lock()
 
         self._prev_wl: Optional[List[List[float]]] = None
+        self._prev_np: Optional[np.ndarray] = None   # то же, но ndarray (быстрый путь)
         self.threshold = getattr(getattr(self.it, "params", None), "max_wl_jump_nm", None)
         self.jump_count = 0
 
@@ -272,14 +274,26 @@ class FrameFanout:
                         if wl is None:
                             continue
 
-                        if self._is_jump_frame(wl):
-                            self.jump_count += 1
-                            continue
-
-                        try:
-                            self._prev_wl = [list(row) for row in wl]
-                        except Exception:
-                            self._prev_wl = None
+                        wl_np = fr.get("wl_np")
+                        if wl_np is not None:
+                            # Быстрый путь: векторная проверка скачков без Python-циклов.
+                            # NaN в сравнениях дают False, т.е. пропускаются, как и раньше.
+                            prev_np = self._prev_np
+                            thr = self.threshold
+                            if (thr is not None and thr > 0 and prev_np is not None
+                                    and prev_np.shape == wl_np.shape
+                                    and bool((np.abs(wl_np - prev_np) > thr).any())):
+                                self.jump_count += 1
+                                continue
+                            self._prev_np = wl_np      # кадры не мутируются -> копия не нужна
+                        else:
+                            if self._is_jump_frame(wl):
+                                self.jump_count += 1
+                                continue
+                            try:
+                                self._prev_wl = [list(row) for row in wl]
+                            except Exception:
+                                self._prev_wl = None
 
                         ts_perf = float(fr.get("t_perf", time.perf_counter()))
                         ts_unix = float(fr.get("timestamp", time.time()))
@@ -924,188 +938,21 @@ def start_live_spectra_session(it: Any,
                                title_prefix: str = "Live spectra",
                                dot_color: str = "red",
                                markersize: float = 8.0,
-                               on_error=None):
+                               on_error=None,
+                               on_status=None):
     """
-    Live-графики спектров отражения: по одному окну на выбранный канал.
+    Live-графики спектров отражения (по одному окну на канал).
 
-    Фоновый поток последовательно запрашивает у интеррогатора:
-      - пики FBG (get_single_FBG_measurement) для всех каналов;
-      - спектр отражения (get_single_spectrum) для каждого канала.
-    FuncAnimation в GUI-потоке обновляет кривую спектра и большие точки пиков FBG.
-
-    Автозум по оси Y выполняется ТОЛЬКО один раз — при первом получении данных,
-    далее ось остаётся фиксированной.
-
-    Возвращает (stop_all, info).
+    Начиная с v3.0.0 — интерактивные окна PyQt5/pyqtgraph, см. live_plot_qt.
+    Вызывать из GUI-потока. Возвращает (stop_all, info).
     """
-    import threading
-    import numpy as np
-    import matplotlib.pyplot as plt
-    from matplotlib.animation import FuncAnimation
-
-    if channels is None or len(channels) == 0:
-        raise ValueError("channels должен быть непустым списком (1-based)")
-
-    channels = [int(c) for c in channels]
-
-    if waves is None:
-        waves = it.get_waves()
-    waves = np.asarray(waves, dtype=float)
-
-    def _interp(px, x, y):
-        """Интерполяция y(px) по x; корректно работает и для убывающего x."""
-        if x.size < 2:
-            return np.full(len(px), np.nan)
-        if x[0] > x[-1]:
-            xr, yr = x[::-1], y[::-1]
-        else:
-            xr, yr = x, y
-        return np.interp(px, xr, yr)
-
-    lock = threading.Lock()
-    latest = {ch: None for ch in channels}
-    stop_event = threading.Event()
-
-    lines = {}
-    dots = {}
-    figs = []
-    anis = []
-
-    plt.ion()
-
-    for ch in channels:
-        fig, ax = plt.subplots(figsize=(9, 4))
-        line, = ax.plot(waves, np.full_like(waves, np.nan), color='tab:blue', lw=1.2)
-        dot_art, = ax.plot([], [], 'o', color=dot_color, markersize=markersize)
-        ax.set_xlabel('Wavelength, nm')
-        ax.set_ylabel('Spectral power, dBm')
-        ax.set_title(f'{title_prefix} (ch {ch})')
-        ax.grid(True, alpha=0.25)
-        lines[ch] = line
-        dots[ch] = dot_art
-        figs.append(fig)
-
-    def _worker():
-        import time as _time
-        last_err_report = 0.0
-        consecutive_errs = 0
-        while not stop_event.is_set():
-            fbgs = None
-            try:
-                fbgs = it.get_single_FBG_measurement()
-                consecutive_errs = 0
-            except Exception as e:
-                fbgs = None
-                consecutive_errs += 1
-                if on_error and (_time.monotonic() - last_err_report) > 1.0:
-                    last_err_report = _time.monotonic()
-                    try:
-                        on_error(f"FBG peaks acquisition failed: {e}")
-                    except Exception:
-                        pass
-
-            for ch in channels:
-                if stop_event.is_set():
-                    break
-                try:
-                    spec = it.get_single_spectrum(ch)
-                except Exception as e:
-                    consecutive_errs += 1
-                    if on_error and (_time.monotonic() - last_err_report) > 1.0:
-                        last_err_report = _time.monotonic()
-                        try:
-                            on_error(f"Spectrum acquisition failed (ch {ch}): {e}")
-                        except Exception:
-                            pass
-                    continue
-                if spec is None:
-                    continue
-
-                consecutive_errs = 0
-                peaks = None
-                if fbgs is not None:
-                    try:
-                        peaks = [float(x) for x in fbgs[ch - 1] if not np.isnan(x)]
-                    except Exception:
-                        peaks = None
-
-                with lock:
-                    latest[ch] = (np.asarray(spec, dtype=float), peaks)
-
-    thr = threading.Thread(target=_worker, name="Spectra-Live", daemon=True)
-    thr.start()
-
-    autoscaled = {ch: False for ch in channels}
-
-    def _make_update(ch):
-        def update(_):
-            with lock:
-                item = latest[ch]
-            if item is None:
-                return [lines[ch], dots[ch]]
-
-            spec, peaks = item
-            n = min(len(spec), len(waves))
-            x = waves[:n]
-            y = spec[:n]
-
-            lines[ch].set_data(x, y)
-
-            if peaks:
-                x_min, x_max = float(np.nanmin(x)), float(np.nanmax(x))
-                px = np.asarray([p for p in peaks if x_min <= p <= x_max], dtype=float)
-                if px.size:
-                    py = _interp(px, x, y)
-                    dots[ch].set_data(px, py)
-                else:
-                    dots[ch].set_data([], [])
-            else:
-                dots[ch].set_data([], [])
-
-            if not autoscaled[ch]:
-                ax = lines[ch].axes
-                ax.relim()
-                ax.autoscale_view(scalex=False, scaley=True)
-                autoscaled[ch] = True
-
-            return [lines[ch], dots[ch]]
-
-        return update
-
-    for ch in channels:
-        fig = lines[ch].figure
-        ani = FuncAnimation(fig, _make_update(ch), interval=int(interval_ms),
-                            blit=False, cache_frame_data=False, save_count=1000)
-        fig._live_spectra_anim_ref = ani
-        anis.append(ani)
-
-    def stop_all():
-        stop_event.set()
-        try:
-            thr.join(timeout=2.0)
-        except Exception:
-            pass
-        for ani in anis:
-            try:
-                ani.event_source.stop()
-            except Exception:
-                pass
-        for fig in figs:
-            try:
-                plt.close(fig)
-            except Exception:
-                pass
-
-    plt.show(block=False)
-    plt.pause(0.05)
-
-    info = {
-        "figs": figs,
-        "anis": anis,
-        "thread": thr,
-        "channels": channels,
-    }
-    return stop_all, info
+    try:
+        from .live_plot_qt import start_live_spectra_session as _impl
+    except ImportError:
+        from live_plot_qt import start_live_spectra_session as _impl
+    return _impl(it, channels, waves=waves, interval_ms=interval_ms,
+                 title_prefix=title_prefix, dot_color=dot_color,
+                 markersize=markersize, on_error=on_error, on_status=on_status)
 
 
 def record_and_plot(it: Any,
@@ -1152,11 +999,9 @@ def record_and_plot(it: Any,
 
     # fanout теперь кладёт (t_perf, ts_unix, pkt_ctr, wl_full)
     q_rec = Queue(maxsize=50000)
-    q_plot = Queue(maxsize=10000)
 
     fan = FrameFanout(it, idle_sleep=0.0002)
     fan.add_consumer_queue(q_rec)
-    fan.add_consumer_queue(q_plot)
     fan.start()
 
     stats = {
@@ -1290,6 +1135,14 @@ def record_and_plot(it: Any,
     stop_plots: List[Callable[[], None]] = []
     figs = []
 
+    # По отдельной очереди на каждый график канала: иначе каналы делят одну очередь
+    # и на графиках появляются пропуски.
+    q_plots = []
+    for _ in plot_channels:
+        _q = Queue(maxsize=10000)
+        fan.add_consumer_queue(_q)
+        q_plots.append(_q)
+
     for k, ch1 in enumerate(plot_channels):
         ch_fbgs = plot_FBGs[k]
         stop_plot, fig = live_plot_wavelengths(
@@ -1301,8 +1154,9 @@ def record_and_plot(it: Any,
             ylim=ylim,
             title=(title or None),
             blocking=False,
-            source_queue=q_plot,
-            use_subplots=use_subplots
+            source_queue=q_plots[k],
+            use_subplots=use_subplots,
+            expected_rate_hz=float(getattr(getattr(it, 'params', None), 'rep_rate', 2000.0) or 2000.0)
         )
         stop_plots.append(stop_plot)
         figs.append(fig)
@@ -1336,55 +1190,117 @@ def record_and_plot(it: Any,
         it.stop_freq_stream()
 
     try:
-        fig0 = figs[0]
-        timer = fig0.canvas.new_timer(interval=int(float(duration_sec) * 1000))
-        timer.single_shot = True
-        timer.add_callback(stop_all)
-        timer.start()
+        # QTimer.singleShot: сработает в GUI-потоке (record_and_plot вызывается из него)
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(int(float(duration_sec) * 1000), stop_all)
     except Exception:
         threading.Timer(duration_sec, stop_all).start()
 
     return stop_all, stats
 
 
+# Настройки отрисовки live-плота (можно менять до запуска измерения).
+# Устарело с v3.0.0 (децимацию по пикселям делает pyqtgraph); оставлено для совместимости.
+LIVE_PLOT_POINTS_PER_PX = 1.0
+# Сглаживание линий: False заметно ускоряет рендер (линии чуть «ступенчатее»).
+LIVE_PLOT_ANTIALIASED = True
+
+
+def _decimate_envelope_multi(x, Y, max_points: int):
+    """
+    Векторное прореживание для отрисовки с сохранением огибающей (min/max по бинам).
+
+    x : (N,)    — общая ось (время)
+    Y : (S, N)  — S рядов (по одному на линию)
+
+    Возвращает (X_out, Y_out), каждая формы (S, M), где M <= max_points. В каждом
+    бине берутся точки min и max ряда, поэтому узкие FBG-дипы не теряются; точки
+    внутри бина упорядочены по времени. Если N <= max_points, возвращается
+    исходное (x повторяется для всех рядов).
+
+    Вся работа — несколько numpy-вызовов на ВСЕ ряды сразу (раньше был питоновский
+    цикл по бинам на каждую линию, что и тормозило отрисовку).
+    """
+    S, N = Y.shape
+    if max_points <= 0 or N <= max_points or max_points < 4:
+        return np.broadcast_to(x, (S, N)), Y
+
+    nbins = max_points // 2
+    k = -(-N // nbins)                  # ceil(N / nbins): размер бина
+    Npad = k * nbins
+    if Npad != N:
+        # добиваем хвост повтором последней точки (на min/max не влияет:
+        # argmin/argmax берут первое вхождение, т.е. реальную точку)
+        Yp = np.concatenate([Y, np.repeat(Y[:, -1:], Npad - N, axis=1)], axis=1)
+    else:
+        Yp = Y
+
+    seg = Yp.reshape(S, nbins, k)
+    # NaN -> игнорируем при поиске экстремумов, но не выбрасываем целиком бин из NaN
+    with np.errstate(invalid="ignore"):
+        i_min = np.argmin(np.where(np.isnan(seg), np.inf, seg), axis=2)
+        i_max = np.argmax(np.where(np.isnan(seg), -np.inf, seg), axis=2)
+    base = (np.arange(nbins, dtype=np.int64) * k)[None, :]
+    i_min = np.minimum(base + i_min, N - 1)
+    i_max = np.minimum(base + i_max, N - 1)
+    lo = np.minimum(i_min, i_max)
+    hi = np.maximum(i_min, i_max)
+    idx = np.stack([lo, hi], axis=2).reshape(S, 2 * nbins)      # неубывающие по времени
+    return x[idx], np.take_along_axis(Y, idx, axis=1)
+
+
 def _decimate_envelope(x, y, max_points: int):
     """
-    Прореживает сигнал для отрисовки, сохраняя огибающую (в т.ч. узкие FBG-дипы).
-
-    Разбивает диапазон на бины и в каждом бине берёт точки min/max по y,
-    благодаря чему резкие провалы не теряются. Возвращает до 2 * (max_points // 2)
-    точек, отсортированных по x (времени). Если точек больше не нужно (или
-    max_points <= 0), возвращает исходные массивы без изменений.
+    Прореживает один ряд для отрисовки, сохраняя огибающую (в т.ч. узкие FBG-дипы).
+    Обёртка над _decimate_envelope_multi (оставлена для обратной совместимости).
     """
     if x is None or y is None:
         return x, y
-    n = y.size
-    if n <= max_points or max_points <= 0:
+    y = np.asarray(y, dtype=float)
+    if y.size <= max_points or max_points <= 0:
         return x, y
+    X2, Y2 = _decimate_envelope_multi(np.asarray(x, dtype=float), y[None, :], max_points)
+    return X2[0], Y2[0]
 
-    nbins = max(1, int(max_points // 2))
-    if nbins >= n:
-        return x, y
 
-    idx_pick = []
-    edges = np.linspace(0, n, nbins + 1).astype(np.int64)
-    for b in range(nbins):
-        i0 = int(edges[b])
-        i1 = int(edges[b + 1])
-        if i1 <= i0:
-            continue
-        yseg = y[i0:i1]
-        i_min = int(i0 + int(np.argmin(yseg)))
-        i_max = int(i0 + int(np.argmax(yseg)))
-        idx_pick.append(i_min)
-        if i_max != i_min:
-            idx_pick.append(i_max)
+class _ScrollBuffer:
+    """
+    Кольцевой буфер времени + S рядов на numpy (замена deque + np.fromiter).
 
-    if not idx_pick:
-        return x, y
+    Хранит данные в массиве удвоенной ёмкости: окно всегда доступно как непрерывный
+    срез БЕЗ копирования, а добавление пачки кадров — один векторный вызов.
+    Когда массив заполняется, последние `capacity` отсчётов сдвигаются в начало
+    (амортизированная стоимость O(1) на отсчёт).
+    """
+    def __init__(self, n_series: int, capacity: int):
+        self.cap = int(capacity)
+        self.t = np.empty(2 * self.cap, dtype=np.float64)
+        self.y = np.empty((int(n_series), 2 * self.cap), dtype=np.float64)
+        self.n = 0
 
-    idx_pick_sorted = np.sort(np.asarray(idx_pick, dtype=np.int64))
-    return x[idx_pick_sorted], y[idx_pick_sorted]
+    def append(self, t_new: np.ndarray, y_new: np.ndarray) -> None:
+        m = t_new.size
+        if m == 0:
+            return
+        if m > self.cap:                       # пришло больше, чем влезает: берём хвост
+            t_new = t_new[-self.cap:]
+            y_new = y_new[:, -self.cap:]
+            m = self.cap
+        if self.n + m > 2 * self.cap:          # сдвиг: оставляем cap - m последних
+            keep = min(self.n, self.cap - m)
+            if keep > 0:
+                self.t[:keep] = self.t[self.n - keep:self.n].copy()
+                self.y[:, :keep] = self.y[:, self.n - keep:self.n].copy()
+            self.n = keep
+        self.t[self.n:self.n + m] = t_new
+        self.y[:, self.n:self.n + m] = y_new
+        self.n += m
+
+    def window(self, t_cut: float):
+        """Срез (t, Y) c t >= t_cut — views, без копирования."""
+        t = self.t[:self.n]
+        i0 = int(np.searchsorted(t, t_cut, side="left"))
+        return t[i0:], self.y[:, i0:self.n]
 
 
 def live_plot_wavelengths(it,
@@ -1398,252 +1314,33 @@ def live_plot_wavelengths(it,
                           blocking: bool = False,
                           source_queue=None,
                           use_subplots: bool = True,
-                          max_frames_per_update: int = 1200,
+                          max_frames_per_update: int = 50000,
                           autoscale_every: int = 10,
                           max_plot_points: int = 3000,
-                          shift_provider=None):
+                          shift_provider=None,
+                          relative_time: bool = True,
+                          use_blit: bool = True,
+                          geometry=None):
     """
-    Live plot (актуальная версия).
+    Live-график длин волн FBG от source_queue (элементы (t_perf, wl_full) или
+    (t_perf, ts_unix, pkt_ctr, wl_full)); функция НЕ читает it.pop_freq_frame.
 
-    ВАЖНО:
-      - функция НЕ читает it.pop_freq_frame()
-      - источник данных: source_queue с элементами:
-          (t_perf, wl_full) ИЛИ (t_perf, ts_unix, pkt_ctr, wl_full)
-
-    ПРИМЕЧАНИЕ (производительность):
-      - каждая линия прореживается через _decimate_envelope до max_plot_points
-        точек (min/max по бинам, огибающая сохраняется, дипы не теряются),
-        чтобы при большом числе каналов/решёток отрисовка не тормозила.
-      - max_fps и autoscale_every уменьшают частоту обновлений и пересчёта
-        лимитов осей; blit не используется из-за скроллирующейся оси времени.
+    Начиная с v3.0.0 — интерактивное окно PyQt5/pyqtgraph (зум, панорамирование,
+    пауза, перекрестие, экспорт), см. live_plot_qt.live_plot_wavelengths.
+    Вызывать из GUI-потока. Возвращает (stop, window), где window — QWidget.
     """
-    import queue
-    from collections import deque
-    import numpy as np
-    import matplotlib.pyplot as plt
-    from matplotlib.animation import FuncAnimation
+    try:
+        from .live_plot_qt import live_plot_wavelengths as _impl
+    except ImportError:
+        from live_plot_qt import live_plot_wavelengths as _impl
+    return _impl(it, channel, fbg_indices, window_sec=window_sec,
+                 expected_rate_hz=expected_rate_hz, max_fps=max_fps, title=title,
+                 ylim=ylim, blocking=blocking, source_queue=source_queue,
+                 use_subplots=use_subplots, max_frames_per_update=max_frames_per_update,
+                 autoscale_every=autoscale_every, max_plot_points=max_plot_points,
+                 shift_provider=shift_provider, relative_time=relative_time,
+                 use_blit=use_blit, geometry=geometry)
 
-    if source_queue is None:
-        raise ValueError(
-            "live_plot_wavelengths теперь работает только от source_queue. "
-            "Создайте FrameFanout и передайте очередь."
-        )
-
-    q = source_queue
-
-    n_ch = int(getattr(it, "channels", 0) or 0)
-    fbg_per_ch = int(getattr(it, "fbg_per_ch", 0) or 0)
-
-    if n_ch > 0 and not (1 <= int(channel) <= n_ch):
-        raise ValueError(f"Некорректный channel={channel}, допустимо 1..{n_ch}")
-    channel_0 = int(channel) - 1
-
-    fbg_indices = [int(i) for i in list(fbg_indices)]
-    if fbg_per_ch > 0:
-        for i in fbg_indices:
-            if not (0 <= i < fbg_per_ch):
-                raise ValueError(f"Некорректный индекс решётки {i}, допустимо 0..{fbg_per_ch - 1}")
-
-    maxlen = max(1000, int(float(expected_rate_hz) * float(window_sec) * 1.5))
-    times = deque(maxlen=maxlen)
-    series = {i: deque(maxlen=maxlen) for i in fbg_indices}
-
-    plt.ion()
-
-    if use_subplots:
-        n = max(1, len(fbg_indices))
-        fig_h = max(3.0, 3 * n)
-        fig, axes = plt.subplots(n, 1, sharex=True, figsize=(14, fig_h))
-        axes_list = [axes] if n == 1 else list(np.ravel(axes))
-
-        fig.suptitle(title or f"Channel {channel}")
-        fig.supxlabel("Time, s")
-        fig.supylabel("FBG wavelength, nm")
-
-        colors = plt.cm.tab10.colors
-        lines = {}
-
-        for k, fbg in enumerate(fbg_indices):
-            axk = axes_list[k]
-            axk.grid(True, alpha=0.25)
-            axk.set_title(f"FBG {fbg + 1}", loc="left", fontsize=10, pad=2)
-            line, = axk.plot([], [], color=colors[k % len(colors)], lw=1.2)
-            if ylim is not None:
-                axk.set_ylim(*ylim)
-            lines[fbg] = (line, axk)
-
-        fig.tight_layout(rect=(0.06, 0.06, 1.0, 0.95))
-
-    else:
-        fig, ax = plt.subplots(figsize=(9, 4))
-        ax.set_title(title or f"Channel {channel}")
-        ax.set_xlabel("Time, s")
-        ax.set_ylabel("FBG wavelength, nm")
-        ax.grid(True, alpha=0.25)
-
-        colors = plt.cm.tab10.colors
-        lines = {}
-        for k, fbg in enumerate(fbg_indices):
-            line, = ax.plot([], [], label=f"FBG {fbg + 1}", color=colors[k % len(colors)], lw=1.2)
-            lines[fbg] = line
-        ax.legend(loc="best")
-        if ylim is not None:
-            ax.set_ylim(*ylim)
-
-    t0 = None
-    update_counter = 0
-
-    color_map = {fbg: plt.cm.tab10.colors[k % len(plt.cm.tab10.colors)]
-                 for k, fbg in enumerate(fbg_indices)}
-    shift_artists = {}
-
-    def _update_shift_lines(x_left, x_right):
-        if shift_provider is None:
-            return
-        data = shift_provider()
-        if not data:
-            return
-        x_text = (x_left + x_right) / 2
-        for fbg, value in data.items():
-            if fbg not in lines:
-                continue
-            try:
-                initial_wl, shift = value
-            except (TypeError, ValueError):
-                continue
-            ax = lines[fbg][1] if use_subplots else lines[fbg]
-            color = color_map.get(fbg, plt.cm.tab10.colors[0])
-            artists = shift_artists.get(fbg)
-            if artists is None:
-                h_init = ax.axhline(initial_wl, linestyle='--', color=color)
-                h_max = ax.axhline(initial_wl + shift, linestyle='--', color=color)
-                txt = ax.text(x_text, initial_wl + shift / 2,
-                              f'shift={shift * 1e3:.1f} pm',
-                              color=color, fontsize=9)
-                shift_artists[fbg] = (h_init, h_max, txt)
-            else:
-                h_init, h_max, txt = artists
-                h_init.set_ydata([initial_wl, initial_wl])
-                h_max.set_ydata([initial_wl + shift, initial_wl + shift])
-                txt.set_position((x_text, initial_wl + shift / 2))
-                txt.set_text(f'shift={shift * 1e3:.1f} pm')
-
-    def _consume_batch():
-        nonlocal t0
-        got = 0
-        for _ in range(int(max_frames_per_update)):
-            try:
-                item = q.get_nowait()
-            except queue.Empty:
-                break
-
-            # совместимость: (t, wl) или (t, ts_unix, pkt_ctr, wl)
-            if isinstance(item, tuple) and len(item) == 2:
-                t, wl = item
-            else:
-                t, _ts_unix, _pkt_ctr, wl = item
-
-            if t0 is None:
-                t0 = float(t)
-
-            times.append(float(t))
-
-            row_ch = []
-            if isinstance(wl, (list, tuple)) and len(wl) > channel_0:
-                row_ch = wl[channel_0]
-
-            for i in fbg_indices:
-                val = float("nan")
-                if isinstance(row_ch, (list, tuple)) and len(row_ch) > i:
-                    try:
-                        val = float(row_ch[i])
-                    except Exception:
-                        val = float("nan")
-                series[i].append(val)
-
-            got += 1
-        return got
-
-    def update(_):
-        nonlocal update_counter
-        update_counter += 1
-
-        _consume_batch()
-
-        if t0 is None or len(times) == 0:
-            if use_subplots:
-                return [lines[i][0] for i in fbg_indices]
-            return list(lines.values())
-
-        t_arr = np.fromiter(times, dtype=float, count=len(times))
-        t_rel = t_arr - t0
-        t_now = float(t_rel[-1])
-        t_min = max(0.0, t_now - float(window_sec))
-        t_max = max(t_now, t_min + 1e-3)
-
-        if use_subplots:
-            for i in fbg_indices:
-                y = np.fromiter(series[i], dtype=float, count=len(series[i]))
-                line, ax_i = lines[i]
-
-                m = min(y.size, t_rel.size)
-                x_plot = t_rel[-m:]
-                y_plot = y[-m:]
-
-                if window_sec > 0:
-                    msk = x_plot >= t_min
-                    x_plot = x_plot[msk]
-                    y_plot = y_plot[msk]
-
-                # Прореживаем для отрисовки: чем больше точек/каналов, тем легче рендер
-                x_plot, y_plot = _decimate_envelope(x_plot, y_plot, max_plot_points)
-                line.set_data(x_plot, y_plot)
-                ax_i.set_xlim(t_min, t_max)
-
-                if ylim is None and (update_counter % int(autoscale_every) == 0):
-                    ax_i.relim()
-                    ax_i.autoscale_view(scalex=False, scaley=True)
-
-            _update_shift_lines(t_min, t_max)
-            return [lines[i][0] for i in fbg_indices]
-
-        else:
-            for i, line in lines.items():
-                y = np.fromiter(series[i], dtype=float, count=len(series[i]))
-                m = min(y.size, t_rel.size)
-                x_plot = t_rel[-m:]
-                y_plot = y[-m:]
-                if window_sec > 0:
-                    msk = x_plot >= t_min
-                    x_plot = x_plot[msk]
-                    y_plot = y_plot[msk]
-                # Прореживаем для отрисовки
-                x_plot, y_plot = _decimate_envelope(x_plot, y_plot, max_plot_points)
-                line.set_data(x_plot, y_plot)
-
-            ax.set_xlim(t_min, t_max)
-            if ylim is None and (update_counter % int(autoscale_every) == 0):
-                ax.relim()
-                ax.autoscale_view(scalex=False, scaley=True)
-            _update_shift_lines(t_min, t_max)
-            return list(lines.values())
-
-    interval_ms = max(1, int(1000 / max(1, int(max_fps))))
-    ani = FuncAnimation(fig, update, interval=interval_ms, blit=False,
-                        cache_frame_data=False, save_count=1000)
-    fig._live_anim_ref = ani
-
-    def stop():
-        try:
-            ani.event_source.stop()
-        except Exception:
-            pass
-
-    plt.show(block=blocking)
-    if not blocking:
-        plt.pause(0.05)
-
-    return stop, fig
 
 
 def safe_stop_interrogator(it: Any, join_timeout: float = 2.0) -> None:

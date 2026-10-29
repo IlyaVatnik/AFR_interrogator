@@ -3,12 +3,12 @@
  <class>Dialog</class>
  <widget class="QDialog" name="Dialog">
   <property name="geometry">
-   <rect>
-    <x>0</x>
-    <y>0</y>
-    <width>339</width>
-    <height>574</height>
-   </rect>
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>339</width>
+     <height>890</height>
+    </rect>
   </property>
   <property name="windowTitle">
    <string>Dialog</string>
@@ -78,71 +78,101 @@
     </item>
    </layout>
   </widget>
-  <widget class="QGroupBox" name="groupBox_2">
-   <property name="geometry">
-    <rect>
-     <x>10</x>
-     <y>170</y>
-     <width>201</width>
-     <height>131</height>
-    </rect>
-   </property>
-   <property name="title">
-    <string>Channel options</string>
-   </property>
-   <layout class="QVBoxLayout" name="verticalLayout_3">
-    <item>
-     <layout class="QVBoxLayout" name="verticalLayout_2">
-      <item>
-       <widget class="QLabel" name="label_27">
-        <property name="text">
-         <string>Channels</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QLineEdit" name="lineEdit_channels">
-        <property name="text">
-         <string>[1]</string>
-        </property>
-        <property name="alignment">
-         <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QLabel" name="label_28">
-        <property name="text">
-         <string>FBGs</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QLineEdit" name="lineEdit_FBGs">
-        <property name="text">
-         <string>[[1,2,3]]</string>
-        </property>
-        <property name="alignment">
-         <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </item>
-   </layout>
-  </widget>
+   <widget class="QGroupBox" name="groupBox_2">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>170</y>
+      <width>201</width>
+      <height>250</height>
+     </rect>
+    </property>
+    <property name="title">
+     <string>Channels and FBGs</string>
+    </property>
+    <layout class="QVBoxLayout" name="verticalLayout_3">
+     <item>
+      <widget class="QCheckBox" name="checkBox_ch_1">
+       <property name="text">
+        <string>Channel 1</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QLineEdit" name="lineEdit_fbg_1">
+       <property name="toolTip">
+        <string>example: 1,2,4</string>
+       </property>
+       <property name="alignment">
+        <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QCheckBox" name="checkBox_ch_2">
+       <property name="text">
+        <string>Channel 2</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QLineEdit" name="lineEdit_fbg_2">
+       <property name="toolTip">
+        <string>example: 1,2,4</string>
+       </property>
+       <property name="alignment">
+        <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QCheckBox" name="checkBox_ch_3">
+       <property name="text">
+        <string>Channel 3</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QLineEdit" name="lineEdit_fbg_3">
+       <property name="toolTip">
+        <string>example: 1,2,4</string>
+       </property>
+       <property name="alignment">
+        <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QCheckBox" name="checkBox_ch_4">
+       <property name="text">
+        <string>Channel 4</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QLineEdit" name="lineEdit_fbg_4">
+       <property name="toolTip">
+        <string>example: 1,2,4</string>
+       </property>
+       <property name="alignment">
+        <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </widget>
   <widget class="QGroupBox" name="groupBox_3">
    <property name="geometry">
-    <rect>
-     <x>10</x>
-     <y>300</y>
-     <width>201</width>
-     <height>181</height>
-    </rect>
-   </property>
-   <property name="title">
-    <string>Gain options</string>
-   </property>
+     <rect>
+      <x>10</x>
+      <y>440</y>
+      <width>201</width>
+      <height>181</height>
+     </rect>
+    </property>
+    <property name="title">
+     <string>Gain options</string>
+    </property>
    <layout class="QVBoxLayout" name="verticalLayout_4">
     <item>
      <widget class="QLabel" name="label_30">
@@ -199,16 +229,16 @@
   </widget>
   <widget class="QGroupBox" name="groupBox_4">
    <property name="geometry">
-    <rect>
-     <x>10</x>
-     <y>490</y>
-     <width>201</width>
-     <height>81</height>
-    </rect>
-   </property>
-   <property name="title">
-    <string>Measurement options</string>
-   </property>
+     <rect>
+      <x>10</x>
+      <y>640</y>
+      <width>201</width>
+      <height>231</height>
+     </rect>
+    </property>
+    <property name="title">
+     <string>Measurement options</string>
+    </property>
    <layout class="QVBoxLayout" name="verticalLayout_5">
     <item>
      <widget class="QLabel" name="label_32">
@@ -225,6 +255,72 @@
       <property name="alignment">
        <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
       </property>
+     </widget>
+    </item>
+    <item>
+     <widget class="QLabel" name="label_33">
+      <property name="text">
+       <string>Max allowed shift of FBG, nm</string>
+      </property>
+     </widget>
+    </item>
+    <item>
+     <widget class="QLineEdit" name="lineEdit_max_wl_jump_nm">
+      <property name="text">
+       <string>0.5</string>
+      </property>
+      <property name="alignment">
+       <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+      </property>
+     </widget>
+    </item>
+    <item>
+     <widget class="QLabel" name="label_34">
+      <property name="text">
+       <string>Repetition rate, Hz</string>
+      </property>
+     </widget>
+    </item>
+    <item>
+     <widget class="QComboBox" name="comboBox_rep_rate">
+      <property name="currentIndex">
+       <number>6</number>
+      </property>
+      <item>
+       <property name="text">
+        <string>1</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>3</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>100</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>200</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>500</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>1000</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>2000</string>
+       </property>
+      </item>
      </widget>
     </item>
    </layout>

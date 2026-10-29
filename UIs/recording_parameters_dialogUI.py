@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Form implementation generated from reading ui file 'recording_parameters_dialog.ui'
+# Form implementation generated from reading ui file 'F:\!Projects\!_Equipment\AFR Interrogator\AFR_interrogator\UIs\recording_parameters_dialog.ui'
 #
 # Created by: PyQt5 UI code generator 5.15.11
 #
@@ -14,18 +14,15 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 class Ui_Dialog(object):
     def setupUi(self, Dialog):
         Dialog.setObjectName("Dialog")
-        Dialog.resize(407, 281)
+        Dialog.resize(407, 364)
         self.buttonBox = QtWidgets.QDialogButtonBox(Dialog)
         self.buttonBox.setGeometry(QtCore.QRect(320, 20, 81, 61))
         self.buttonBox.setOrientation(QtCore.Qt.Vertical)
         self.buttonBox.setStandardButtons(QtWidgets.QDialogButtonBox.Cancel|QtWidgets.QDialogButtonBox.Ok)
         self.buttonBox.setObjectName("buttonBox")
         self.groupBox_4 = QtWidgets.QGroupBox(Dialog)
-        self.groupBox_4.setGeometry(QtCore.QRect(30, 20, 251, 241))
+        self.groupBox_4.setGeometry(QtCore.QRect(30, 20, 281, 311))
         self.groupBox_4.setObjectName("groupBox_4")
-        self.label_34 = QtWidgets.QLabel(self.groupBox_4)
-        self.label_34.setGeometry(QtCore.QRect(160, 160, 16, 16))
-        self.label_34.setObjectName("label_34")
         self.label_36 = QtWidgets.QLabel(self.groupBox_4)
         self.label_36.setGeometry(QtCore.QRect(10, 80, 71, 16))
         self.label_36.setObjectName("label_36")
@@ -37,19 +34,12 @@ class Ui_Dialog(object):
         self.lineEdit_write_every_nth.setGeometry(QtCore.QRect(100, 120, 31, 20))
         self.lineEdit_write_every_nth.setAlignment(QtCore.Qt.AlignRight|QtCore.Qt.AlignTrailing|QtCore.Qt.AlignVCenter)
         self.lineEdit_write_every_nth.setObjectName("lineEdit_write_every_nth")
-        self.label_32 = QtWidgets.QLabel(self.groupBox_4)
-        self.label_32.setGeometry(QtCore.QRect(10, 160, 91, 16))
-        self.label_32.setObjectName("label_32")
         self.label_35 = QtWidgets.QLabel(self.groupBox_4)
         self.label_35.setGeometry(QtCore.QRect(150, 120, 61, 16))
         self.label_35.setObjectName("label_35")
         self.label_33 = QtWidgets.QLabel(self.groupBox_4)
         self.label_33.setGeometry(QtCore.QRect(10, 120, 71, 16))
         self.label_33.setObjectName("label_33")
-        self.lineEdit_rep_rate = QtWidgets.QLineEdit(self.groupBox_4)
-        self.lineEdit_rep_rate.setGeometry(QtCore.QRect(100, 160, 41, 20))
-        self.lineEdit_rep_rate.setAlignment(QtCore.Qt.AlignRight|QtCore.Qt.AlignTrailing|QtCore.Qt.AlignVCenter)
-        self.lineEdit_rep_rate.setObjectName("lineEdit_rep_rate")
         self.label_37 = QtWidgets.QLabel(self.groupBox_4)
         self.label_37.setGeometry(QtCore.QRect(150, 80, 16, 16))
         self.label_37.setObjectName("label_37")
@@ -58,13 +48,23 @@ class Ui_Dialog(object):
         self.checkBox_plot_live_while_recording.setChecked(False)
         self.checkBox_plot_live_while_recording.setObjectName("checkBox_plot_live_while_recording")
         self.comboBox_type_of_recording = QtWidgets.QComboBox(self.groupBox_4)
-        self.comboBox_type_of_recording.setGeometry(QtCore.QRect(100, 30, 91, 22))
+        self.comboBox_type_of_recording.setGeometry(QtCore.QRect(170, 30, 91, 22))
         self.comboBox_type_of_recording.setObjectName("comboBox_type_of_recording")
         self.comboBox_type_of_recording.addItem("")
         self.comboBox_type_of_recording.addItem("")
         self.label_38 = QtWidgets.QLabel(self.groupBox_4)
-        self.label_38.setGeometry(QtCore.QRect(10, 32, 71, 16))
+        self.label_38.setGeometry(QtCore.QRect(10, 32, 101, 16))
         self.label_38.setObjectName("label_38")
+        self.label_folder_to_save_2 = QtWidgets.QLabel(self.groupBox_4)
+        self.label_folder_to_save_2.setGeometry(QtCore.QRect(10, 246, 61, 23))
+        self.label_folder_to_save_2.setObjectName("label_folder_to_save_2")
+        self.label_folder_to_save_3 = QtWidgets.QLabel(self.groupBox_4)
+        self.label_folder_to_save_3.setGeometry(QtCore.QRect(170, 270, 101, 23))
+        self.label_folder_to_save_3.setObjectName("label_folder_to_save_3")
+        self.lineEdit_file_name = QtWidgets.QLineEdit(self.groupBox_4)
+        self.lineEdit_file_name.setGeometry(QtCore.QRect(80, 250, 181, 20))
+        self.lineEdit_file_name.setAlignment(QtCore.Qt.AlignRight|QtCore.Qt.AlignTrailing|QtCore.Qt.AlignVCenter)
+        self.lineEdit_file_name.setObjectName("lineEdit_file_name")
 
         self.retranslateUi(Dialog)
         self.buttonBox.accepted.connect(Dialog.accept) # type: ignore
@@ -75,26 +75,16 @@ class Ui_Dialog(object):
         _translate = QtCore.QCoreApplication.translate
         Dialog.setWindowTitle(_translate("Dialog", "Dialog"))
         self.groupBox_4.setTitle(_translate("Dialog", "Recording options"))
-        self.label_34.setText(_translate("Dialog", "Hz"))
         self.label_36.setText(_translate("Dialog", "Duration"))
         self.lineEdit_recording_duration.setText(_translate("Dialog", "10"))
         self.lineEdit_write_every_nth.setText(_translate("Dialog", "10"))
-        self.label_32.setText(_translate("Dialog", "Repetition rate"))
         self.label_35.setText(_translate("Dialog", "th frame"))
         self.label_33.setText(_translate("Dialog", "Save each "))
-        self.lineEdit_rep_rate.setText(_translate("Dialog", "2000"))
         self.label_37.setText(_translate("Dialog", "s"))
         self.checkBox_plot_live_while_recording.setText(_translate("Dialog", "plot live while recording"))
         self.comboBox_type_of_recording.setItemText(0, _translate("Dialog", "FBG peaks"))
         self.comboBox_type_of_recording.setItemText(1, _translate("Dialog", "Spectra"))
-        self.label_38.setText(_translate("Dialog", "Type of measurement"))
-
-
-if __name__ == "__main__":
-    import sys
-    app = QtWidgets.QApplication(sys.argv)
-    Dialog = QtWidgets.QDialog()
-    ui = Ui_Dialog()
-    ui.setupUi(Dialog)
-    Dialog.show()
-    sys.exit(app.exec_())
+        self.label_38.setText(_translate("Dialog", "Data to measure"))
+        self.label_folder_to_save_2.setText(_translate("Dialog", "File name:"))
+        self.label_folder_to_save_3.setText(_translate("Dialog", ".fbgs/.spectra"))
+        self.lineEdit_file_name.setText(_translate("Dialog", "1"))

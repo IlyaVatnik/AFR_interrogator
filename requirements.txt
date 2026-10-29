@@ -1,0 +1,7 @@
+PyQt5>=5.15,<6
+numpy>=1.24
+matplotlib>=3.7
+pyqtgraph>=0.13.4
+pyserial>=3.5
+packaging>=21
+pyinstaller>=6.0
