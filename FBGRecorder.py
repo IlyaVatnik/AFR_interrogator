@@ -19,8 +19,8 @@ Live-плот: live_plot_wavelengths(it, channel, fbg_indices, ...) — запу
 (нужен созданный QApplication).
 """
 
-__version__ = '3.0.0'
-__date__ = '2026.10.27'
+__version__ = '3.1.0'
+__date__ = '2026.11.11'
 
 import os
 import struct
@@ -722,12 +722,16 @@ def read_spectra_from_file(filepath: str, channel: int):
     return times, waves, spectra, other_params
 
 
-def read_fbg_stream_raw_lp(filepath: str, debug: bool = False):
+def read_fbg_stream_raw_lp(filepath: str, debug: bool = False, with_pkt_ctr: bool = False):
     """
     ПАТЧ:
       - читает до последнего корректного блока
       - при повреждённом/оборванном хвосте возвращает уже накопленные данные
       - если header повреждён/не дочитан -> выбрасывает понятное исключение
+
+    with_pkt_ctr=True: дополнительно (6-м элементом) возвращает массив счётчиков
+    пакетов pkt_ctr (нужен для восстановления потерянных кадров в акустическом
+    анализе; если прошивка счётчик не кладёт, анализ его проигнорирует).
     """
     import numpy as np
     import pickle
@@ -774,6 +778,7 @@ def read_fbg_stream_raw_lp(filepath: str, debug: bool = False):
         other_params = header.get("other_params", None)
 
         t_perf: List[float] = []
+        pkt_ctrs: List[float] = []
         acc: List[List[List[float]]] = [[[] for _ in range(fbg_counts[ch])] for ch in range(n_ch)]
 
         def _append_record(ts_p, wl):
@@ -830,9 +835,15 @@ def read_fbg_stream_raw_lp(filepath: str, debug: bool = False):
                 if isinstance(rec, tuple) and len(rec) == 4:
                     ts_p, ts_u, pkt_ctr, wl = rec
                     _append_record(ts_p, wl)
+                    try:
+                        pkt_ctrs.append(float(pkt_ctr))
+                    except Exception:
+                        pkt_ctrs.append(float("nan"))
 
     t_perf_arr = np.asarray(t_perf, dtype=float)
     if t_perf_arr.size == 0:
+        if with_pkt_ctr:
+            return t_perf_arr, {}, channel_list, FBGs_list, other_params, np.asarray([], dtype=float)
         return t_perf_arr, {}, channel_list, FBGs_list, other_params
 
     t0 = t_perf_arr[0]
@@ -845,6 +856,8 @@ def read_fbg_stream_raw_lp(filepath: str, debug: bool = False):
         fbgs = list(FBGs_list[i])
         channels[int(ch)] = {int(fbg_id): arr[j, :] for j, fbg_id in enumerate(fbgs)}
 
+    if with_pkt_ctr:
+        return times, channels, channel_list, FBGs_list, other_params, np.asarray(pkt_ctrs, dtype=float)
     return times, channels, channel_list, FBGs_list, other_params
 
 
@@ -864,7 +877,8 @@ def start_live_plot_session(it: Any,
                             queue_maxsize: int = 10000,
                             max_frames_per_update: int = 1200,
                             max_plot_points: int = 3000,
-                            autoscale_every: int = 30) -> Tuple[Callable[[], None], Dict[str, Any]]:
+                            autoscale_every: int = 30,
+                            fanout: Optional["FrameFanout"] = None) -> Tuple[Callable[[], None], Dict[str, Any]]:
     """
     Запускает:
       - FrameFanout (единственный читатель it.pop_freq_frame)
@@ -873,10 +887,15 @@ def start_live_plot_session(it: Any,
 
     Примечание: max_plot_points/autoscale_every управляют децимацией и частотой
     автозума (то же, что и в динамических измерениях).
+
+    fanout: если передан уже запущенный FrameFanout (общий с другими live-окнами,
+    например с акустическими спектрами), он используется как есть, а stop_all
+    только отписывает свои очереди и НЕ останавливает его.
     """
     from queue import Queue
 
-    fan = FrameFanout(it, idle_sleep=0.0002)
+    own_fan = fanout is None
+    fan = FrameFanout(it, idle_sleep=0.0002) if own_fan else fanout
     stops: List[Callable[[], None]] = []
     figs = []
     queues = []
@@ -886,7 +905,8 @@ def start_live_plot_session(it: Any,
         fan.add_consumer_queue(q)
         queues.append(q)
 
-    fan.start()
+    if own_fan:
+        fan.start()
 
     for idx, ch1 in enumerate(plot_channels):
         fbg1_list = plot_FBGs[idx] if idx < len(plot_FBGs) else []
@@ -917,10 +937,17 @@ def start_live_plot_session(it: Any,
                 s()
             except Exception:
                 pass
-        try:
-            fan.stop(timeout=1.0)
-        except Exception:
-            pass
+        if own_fan:
+            try:
+                fan.stop(timeout=1.0)
+            except Exception:
+                pass
+        else:
+            for q in queues:
+                try:
+                    fan.remove_consumer_queue(q)
+                except Exception:
+                    pass
 
     info = {
         "fanout": fan,
@@ -953,6 +980,25 @@ def start_live_spectra_session(it: Any,
     return _impl(it, channels, waves=waves, interval_ms=interval_ms,
                  title_prefix=title_prefix, dot_color=dot_color,
                  markersize=markersize, on_error=on_error, on_status=on_status)
+
+
+def start_live_acoustic_session(fanout: "FrameFanout",
+                                channels: List[int],
+                                FBGs: List[List[int]],
+                                settings: Dict[str, Any],
+                                rep_rate_hz: float = 2000.0,
+                                on_error=None,
+                                on_all_closed=None):
+    """
+    Live-спектры акустических шумов (Фурье колебаний длины волны каждой решётки).
+    См. live_plot_qt.start_live_acoustic_session. Вызывать из GUI-потока.
+    """
+    try:
+        from .live_plot_qt import start_live_acoustic_session as _impl
+    except ImportError:
+        from live_plot_qt import start_live_acoustic_session as _impl
+    return _impl(fanout, channels, FBGs, settings, rep_rate_hz=rep_rate_hz,
+                 on_error=on_error, on_all_closed=on_all_closed)
 
 
 def record_and_plot(it: Any,

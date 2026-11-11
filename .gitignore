@@ -4,3 +4,4 @@
 *.fbgs
 /build
 /dist
+/.venv

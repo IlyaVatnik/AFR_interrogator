@@ -8,6 +8,8 @@ spectra», а также для live-графика при записи и пр�
 Публичный API (его вызывает AFR_interrogator.FBGRecorder; сигнатуры сохранены):
     live_plot_wavelengths(...)      -> (stop, window)
     start_live_spectra_session(...) -> (stop_all, info)
+    live_plot_acoustic_spectra(...) -> (stop, window)        [v3.1.0]
+    start_live_acoustic_session(...) -> (stop_all, info)     [v3.1.0]
     close_all_live_windows()
 
 Все функции нужно вызывать из GUI-потока (там, где живёт QApplication).
@@ -93,6 +95,7 @@ class LivePlotWindow(QtWidgets.QWidget):
 
         bar = QtWidgets.QHBoxLayout()
         root.addLayout(bar)
+        self.bar = bar
 
         self.btn_pause = QtWidgets.QPushButton("Pause")
         self.btn_pause.setCheckable(True)
@@ -820,3 +823,408 @@ def start_live_spectra_session(it,
         "channels": channels,
     }
     return stop_all, info
+
+
+# ==========================
+# Live-спектры акустических шумов (Фурье колебаний длины волны FBG)
+# ==========================
+
+def _acoustic():
+    try:
+        from . import acoustic_analysis
+    except ImportError:
+        import acoustic_analysis
+    return acoustic_analysis
+
+
+def live_plot_acoustic_spectra(channel: int,
+                               fbg_indices,
+                               source_queue,
+                               settings: dict,
+                               expected_rate_hz: float = 2000.0,
+                               title: Optional[str] = None,
+                               on_error=None,
+                               max_frames_per_update: int = 200000):
+    """
+    Интерактивный live-график спектров акустических шумов решёток одного канала:
+    по подграфику на решётку, спектр колебаний λ(t), посчитанный методом Уэлча
+    по скользящему буферу последних n_averages окон длиной fft_window_s
+    (перекрытие 50 %, линейный детренд в каждом окне).
+
+    source_queue — очередь FrameFanout с элементами (t_perf, ts_unix, pkt_ctr, wl_full).
+    fbg_indices  — 0-based индексы решёток в канале.
+    settings     — dict из acoustic_analysis.settings_from_params().
+
+    В окне: Pause, Auto-scale/reset, Crosshair (как у остальных live-окон),
+    плюс «Peak hold» (огибающая максимумов) и «Clear hold».
+    В заголовке каждого подграфика — СКО колебаний λ в полосе [f_min, f_max].
+
+    Возвращает (stop, window).
+    """
+    _require_app()
+    rec = _rec()
+    ac = _acoustic()
+
+    channel_0 = int(channel) - 1
+    fbg_indices = [int(i) for i in list(fbg_indices)]
+    n_series = len(fbg_indices)
+    if n_series == 0:
+        raise ValueError(f"Для канала {channel} не выбрано ни одной решётки")
+    q = source_queue
+
+    T = float(settings['fft_window_s'])
+    n_avg = int(settings['n_averages'])
+    win_name = settings['window']
+    scale = settings['scale']
+    log_f = bool(settings['log_f'])
+    f_min_set = float(settings['f_min_hz'])
+    f_max_set = float(settings['f_max_hz'])
+    ylabel, qty, log_y = ac.scale_units(scale)
+    y_unit = ylabel.split(', ', 1)[1] if ', ' in ylabel else ''
+
+    # Буфер: длительность Уэлча (T·(n_avg+1)/2) с запасом, по макс. возможной частоте.
+    need_sec = T * (n_avg + 1) / 2.0
+    capacity = int(max(4000, max(float(expected_rate_hz), 8000.0) * (need_sec + 2.0) * 1.3))
+    buf = rec._ScrollBuffer(n_series + 1, capacity)    # последняя строка — счётчик пакетов
+
+    win_title = title or f"Acoustic spectra (ch {channel})"
+    win = LivePlotWindow(win_title, size=(1100, min(max(420, 240 * n_series + 110), 950)))
+
+    chk_hold = QtWidgets.QCheckBox("Peak hold")
+    chk_hold.setToolTip("Показывать огибающую максимумов спектра (серым)")
+    btn_clear = QtWidgets.QPushButton("Clear hold")
+    win.bar.insertWidget(3, chk_hold)
+    win.bar.insertWidget(4, btn_clear)
+
+    head = QtWidgets.QLabel(win_title)
+    fh = head.font()
+    fh.setBold(True)
+    head.setFont(fh)
+    head.setAlignment(QtCore.Qt.AlignHCenter)
+    win.body.addWidget(head)
+    status = QtWidgets.QLabel("waiting for data…")
+    status.setAlignment(QtCore.Qt.AlignHCenter)
+    win.body.addWidget(status)
+
+    glw = pg.GraphicsLayoutWidget()
+    win.body.addWidget(glw, 1)
+    aa_ = bool(getattr(rec, "LIVE_PLOT_ANTIALIASED", True))
+
+    plots, curves, holds = [], [], []
+    for k, fbg in enumerate(fbg_indices):
+        p = glw.addPlot(row=k, col=0)
+        is_last = (k == n_series - 1)
+        _style_plot(p, "Frequency, Hz" if is_last else None, ylabel)
+        p.setLogMode(x=log_f, y=log_y)
+        if not is_last:
+            p.getAxis("bottom").setStyle(showValues=False)
+        p.setTitle(f"FBG {fbg + 1}", size="9pt")
+        if k > 0:
+            p.setXLink(plots[0])
+        color = _PALETTE[k % len(_PALETTE)]
+        h = p.plot([], [], pen=pg.mkPen("#aaaaaa", width=1), antialias=aa_)
+        c = p.plot([], [], pen=pg.mkPen(color, width=1), antialias=aa_)
+        plots.append(p)
+        curves.append(c)
+        holds.append(h)
+
+    state = {"closed": False, "t0": None, "fs": None, "x_set": False,
+             "hold": [None] * n_series, "f": None, "last_err": 0.0}
+    auto_y = {id(p): True for p in plots}
+
+    def _on_manual(p):
+        def _h(*_a):
+            auto_y[id(p)] = False
+        return _h
+    for p in plots:
+        p.vb.sigRangeChangedManually.connect(_on_manual(p))
+
+    def _vx(x):
+        return np.log10(x) if log_f else x
+
+    def _vy(y):
+        return np.log10(y) if log_y else y
+
+    def _set_x(lo, hi):
+        plots[0].setXRange(_vx(lo), _vx(hi), padding=0)
+
+    def _autoscale(p, ys, force=False):
+        y = np.concatenate([np.asarray(v, dtype=float) for v in ys if v is not None and len(v)])
+        y = y[np.isfinite(y)]
+        if log_y:
+            y = y[y > 0]
+        if y.size == 0:
+            return
+        vy = _vy(y)
+        lo, hi = float(np.percentile(vy, 0.5)), float(vy.max())
+        span = hi - lo
+        pad = 0.06 * span if span > 0 else 0.5
+        lo, hi = lo - pad, hi + pad
+        cur_lo, cur_hi = p.vb.viewRange()[1]
+        if force or lo < cur_lo or hi > cur_hi or (hi - lo) < 0.5 * (cur_hi - cur_lo):
+            p.setYRange(lo, hi, padding=0)
+
+    def _consume():
+        items = []
+        for _ in range(int(max_frames_per_update)):
+            try:
+                items.append(q.get_nowait())
+            except queue.Empty:
+                break
+        if not items:
+            return
+        rows, ts = [], []
+        for it_ in items:
+            try:
+                if len(it_) == 4:
+                    t_, _u, ctr, wl = it_
+                else:
+                    t_, wl = it_
+                    ctr = np.nan
+                row_ch = wl[channel_0]
+                r = []
+                for i in fbg_indices:
+                    try:
+                        r.append(float(row_ch[i]))
+                    except Exception:
+                        r.append(np.nan)
+                r.append(float(ctr))
+                rows.append(r)
+                ts.append(float(t_))
+            except Exception:
+                continue
+        if not rows:
+            return
+        if state["t0"] is None:
+            state["t0"] = ts[0]
+        buf.append(np.asarray(ts, dtype=np.float64), np.ascontiguousarray(np.asarray(rows).T))
+
+    def _report(msg):
+        now = _time.monotonic()
+        if on_error and now - state["last_err"] > 2.0:
+            state["last_err"] = now
+            try:
+                on_error(msg)
+            except Exception:
+                pass
+
+    def _compute():
+        n = buf.n
+        if n < 32:
+            return
+        t_all = buf.t[:n]
+        # fs — по последним ≤ 10 с (средняя частота приёма кадров)
+        i_fs = int(np.searchsorted(t_all, t_all[-1] - 10.0))
+        span = float(t_all[-1] - t_all[i_fs])
+        fs_est = (n - 1 - i_fs) / span if span > 0.5 else float(expected_rate_hz)
+        nperseg = max(16, int(round(T * fs_est)))
+        hop = max(1, nperseg // 2)
+        n_need = nperseg + (n_avg - 1) * hop
+        if n < nperseg:
+            status.setText(f"filling buffer: {100.0 * n / nperseg:.0f} % of the first FFT window "
+                           f"(fs ≈ {fs_est:.0f} Hz)")
+            return
+        i0 = max(0, n - n_need)
+        t_w = buf.t[i0:n]
+        Y_w = buf.y[:n_series, i0:n]
+        ctr = buf.y[n_series, i0:n]
+        Yu, fs, info = ac.make_uniform(t_w, Y_w, ctr, fs_hint=fs_est)
+        Yu, bad = ac.fill_nans(Yu)
+        Yu = Yu * ac.NM_TO_PM
+        nps = min(nperseg, Yu.shape[1])
+        f, psd, nseg = ac.welch_psd(Yu, fs, nps, n_averages=n_avg, window=win_name, overlap=0.5)
+        vals = ac.psd_to_scale(psd, scale, win_name, nps, fs)
+        df = f[1] - f[0] if f.size > 1 else 1.0
+        f_lo, f_hi = ac.freq_limits(f_min_set, f_max_set, fs, df, log_f)
+        rms = ac.band_rms(f, psd, f_min_set, f_hi)
+
+        m = f > 0 if log_f else np.ones_like(f, dtype=bool)
+        fx = f[m]
+        if state["f"] is None or state["f"].shape != f.shape or not np.allclose(state["f"], f):
+            state["hold"] = [None] * n_series        # сетка частот изменилась — сброс hold
+        state["f"] = f
+
+        for k in range(n_series):
+            yk = vals[k][m]
+            if log_y:
+                yk = np.maximum(yk, 1e-12)
+            curves[k].setData(fx, yk)
+            if chk_hold.isChecked():
+                hk = state["hold"][k]
+                state["hold"][k] = yk.copy() if hk is None or hk.shape != yk.shape else np.maximum(hk, yk)
+                holds[k].setData(fx, state["hold"][k])
+            else:
+                holds[k].setData([], [])
+            plots[k].setTitle(f"FBG {fbg_indices[k] + 1}    rms({f_min_set:g}–{f_hi:.4g} Hz) = "
+                              f"{rms[k]:.4g} pm", size="9pt")
+
+        if not state["x_set"]:
+            _set_x(f_lo, f_hi)
+            state["x_set"] = True
+        for k, p in enumerate(plots):
+            if auto_y[id(p)]:
+                _autoscale(p, [vals[k][m][(fx >= f_lo) & (fx <= f_hi)]],
+                           force=(state["fs"] is None))
+        state["fs"] = fs
+
+        gaps = ""
+        if info.get("counter_used") and info.get("missing"):
+            gaps = f" | restored {info['missing']} lost frames"
+        if bad > 0:
+            gaps += f" | NaN {100 * bad:.1f} %"
+        fill = "" if nseg >= n_avg else f" (buffer filling)"
+        status.setText(f"fs ≈ {fs:.1f} Hz | T = {nps / fs:.3g} s, Δf = {df:.3g} Hz | {win_name} | "
+                       f"averages {nseg}/{n_avg}{fill}{gaps}")
+
+    def tick():
+        if state["closed"]:
+            return
+        try:
+            _consume()                      # копим и на паузе
+            if win.paused:
+                return
+            _compute()
+        except Exception as e:
+            _report(f"Acoustic spectra error (ch {channel}): {e!r}")
+
+    timer = QtCore.QTimer()
+    timer.setInterval(int(settings.get('update_ms', 250)))
+    timer.timeout.connect(tick)
+
+    def reset_view():
+        for p in plots:
+            auto_y[id(p)] = True
+        state["x_set"] = False
+        state["fs"] = None
+        if state["f"] is not None and not win.paused:
+            tick()
+    win.btn_reset.clicked.connect(lambda *_: reset_view())
+
+    def clear_hold():
+        state["hold"] = [None] * n_series
+        for h in holds:
+            h.setData([], [])
+    btn_clear.clicked.connect(lambda *_: clear_hold())
+    chk_hold.toggled.connect(lambda on: None if on else clear_hold())
+
+    def _fmt(plot, x, y):
+        fx = 10 ** x if log_f else x
+        yy = 10 ** y if log_y else y
+        name = ""
+        for k, p in enumerate(plots):
+            if p is plot:
+                name = f"FBG {fbg_indices[k] + 1}  "
+        return f"{name}f={fx:.4g} Hz   {qty}={yy:.4g} {y_unit}"
+    _Crosshair(plots, win, _fmt)
+
+    def stop():
+        try:
+            timer.stop()
+        except Exception:
+            pass
+        try:
+            win.mark_stopped()
+        except Exception:
+            pass
+
+    def _on_closed():
+        state["closed"] = True
+        try:
+            timer.stop()
+        except Exception:
+            pass
+    win.closed.connect(_on_closed)
+
+    win._live_timer = timer
+    win._live_tick = tick
+    timer.start()
+    win.show()
+    return stop, win
+
+
+def start_live_acoustic_session(fanout,
+                                channels,
+                                FBGs,
+                                settings: dict,
+                                rep_rate_hz: float = 2000.0,
+                                title_prefix: str = "Acoustic spectra",
+                                on_error=None,
+                                on_all_closed=None,
+                                queue_maxsize: int = 200000):
+    """
+    Окна live-спектров акустических шумов: по одному на канал (подграфик на решётку).
+
+    fanout   — уже запущенный FrameFanout (общий с «Plot live dynamics»).
+    channels — 1-based каналы; FBGs — 1-based решётки на каждый канал.
+    on_all_closed() вызывается, когда пользователь закрыл все окна крестиком.
+
+    Возвращает (stop_all, info). stop_all отписывает очереди от fanout и
+    «замораживает» окна (они остаются открытыми для изучения).
+    """
+    _require_app()
+    stops, wins, queues = [], [], []
+    closed_count = {"n": 0}
+
+    try:
+        for idx, ch in enumerate(channels):
+            fbg1 = FBGs[idx] if idx < len(FBGs) else []
+            if not fbg1:
+                continue
+            q = queue.Queue(maxsize=int(queue_maxsize))
+            fanout.add_consumer_queue(q)
+            queues.append(q)
+            stop, win = live_plot_acoustic_spectra(
+                channel=int(ch),
+                fbg_indices=[int(x) - 1 for x in fbg1],
+                source_queue=q,
+                settings=settings,
+                expected_rate_hz=float(rep_rate_hz),
+                title=f"{title_prefix} (ch {ch})",
+                on_error=on_error,
+            )
+            stops.append(stop)
+            wins.append(win)
+    except Exception:
+        for q in queues:
+            try:
+                fanout.remove_consumer_queue(q)
+            except Exception:
+                pass
+        for s in stops:
+            try:
+                s()
+            except Exception:
+                pass
+        raise
+
+    if not wins:
+        raise ValueError("Нет включённых решёток: задайте каналы/FBG в Set interrogator parameters")
+
+    done = {"stopped": False}
+
+    def _one_closed():
+        closed_count["n"] += 1
+        if closed_count["n"] >= len(wins) and not done["stopped"] and on_all_closed:
+            try:
+                on_all_closed()
+            except Exception:
+                pass
+    for w in wins:
+        w.closed.connect(_one_closed)
+
+    def stop_all():
+        if done["stopped"]:
+            return
+        done["stopped"] = True
+        for q in queues:
+            try:
+                fanout.remove_consumer_queue(q)
+            except Exception:
+                pass
+        for s in stops:
+            try:
+                s()
+            except Exception:
+                pass
+
+    return stop_all, {"windows": wins, "queues": queues, "stops": stops}

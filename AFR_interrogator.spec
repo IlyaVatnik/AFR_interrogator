@@ -5,12 +5,17 @@ a = Analysis(
     ['GUI_interrogator.py'],
     pathex=[],
     binaries=[],
-    datas=[('Params.txt', '.')],
+    datas=[('Params.txt', '.'), ('app_icon.ico', '.')],
     hiddenimports=['pyqtgraph'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['PyQt6', 'PySide6', 'PySide2', 'sklearn', 'jupyter', 'IPython', 'notebook', 'pandas'],
+    excludes=[
+        'PyQt6', 'PySide6', 'PySide2',
+        'sklearn', 'jupyter', 'IPython', 'notebook', 'pandas',
+        'scipy', 'numba', 'llvmlite', 'pygments', 'psutil',
+        'win32', 'win32com', 'pywin32',
+    ],
     noarchive=False,
     optimize=0,
 )
@@ -32,6 +37,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['app_icon.ico'],
 )
 coll = COLLECT(
     exe,

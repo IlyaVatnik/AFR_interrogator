@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '2.0.0'
-__date__ = '2026.10.29'
+__version__ = '2.1.0'
+__date__ = '2026.11.11'
 
 import os
 import ast
@@ -28,8 +28,9 @@ from PyQt5.QtWidgets import (
 from FBGRecorder import (
     record_and_plot, record_to_file, read_fbg_stream_raw_lp,
     start_live_plot_session, record_spectra_to_file, read_spectra_from_file,
-    start_live_spectra_session,
+    start_live_spectra_session, start_live_acoustic_session, FrameFanout,
 )
+from acoustic_analysis import Params_acoustic, settings_from_params, plot_spectrogram
 from interrogator import Interrogator, Params_interrogator
 from interrogator_IP_config import AFRConfiguratorRS232, find_afr_interrogator_port
 from long_term_measurements import (
@@ -54,6 +55,7 @@ class Params:
         self.it = Params_interrogator()
         self.record = Params_recording()
         self.long_term = Long_term_measurement_params()
+        self.acoustic = Params_acoustic()
 
 
 class ThreadedMainWindow(QMainWindow):
@@ -104,6 +106,12 @@ class MainWindow(ThreadedMainWindow):
         self.it = None
 
         self._active_fanout = None
+        # Общий поток кадров (start_freq_stream + один FrameFanout) для live-окон:
+        # «Plot live dynamics» и «Plot live acoustic spectra» могут работать одновременно.
+        self._stream_fan = None
+        self._stream_users = set()
+        self._stop_live = None
+        self._stop_acoustic = None
         self._jump_timer = QTimer(self)
         self._jump_timer.setInterval(200)
         self._jump_timer.timeout.connect(self._poll_jump_count)
@@ -116,6 +124,8 @@ class MainWindow(ThreadedMainWindow):
         self._loaded_fbgs_list = []
         self._loaded_waves = None
         self._loaded_spectrum = None
+        self._loaded_path = None
+        self._loaded_pkt_ctr = None
 
         self.init_interface()
         self.load_parameters_from_file(self.ParametersFileName)
@@ -145,7 +155,8 @@ class MainWindow(ThreadedMainWindow):
         self.ui.pushButton_start_recording.pressed.connect(self.recording)
         self.ui.pushButton_plot_live_dynamics.toggled[bool].connect(self.plot_live_dynamics)
         self.ui.pushButton_plot_live_spectra.toggled[bool].connect(self.plot_live_spectra)
-        self.ui.pushButton_set_recording_parameters.pressed.connect(self.set_recording_parameters)
+        self.ui.pushButton_plot_live_acoustic_spectra.toggled[bool].connect(self.plot_live_acoustic_spectra)
+        self.ui.pushButton_set_measurement_parameters.pressed.connect(self.set_measurement_parameters)
 
         self.ui.pushButton_long_term_measurements.toggled[bool].connect(self.long_term_measurements)
         self.ui.pushButton_set_long_term_measurements_params.pressed.connect(
@@ -154,6 +165,7 @@ class MainWindow(ThreadedMainWindow):
 
         self.ui.pushButton_choose_file_to_load.clicked.connect(self.choose_file_to_load)
         self.ui.pushButton_plot_from_file.clicked.connect(self.plot_from_file)
+        self.ui.pushButton_plot_acoustic_spectrogram.clicked.connect(self.plot_acoustic_spectrogram)
         self.ui.pushButton_save_single_line_to_csv.pressed.connect(self.save_single_line_to_csv)
         self.ui.comboBox_channel_to_plot_static_slice.currentIndexChanged.connect(
             lambda _: self._update_fbg_combo()
@@ -189,6 +201,8 @@ class MainWindow(ThreadedMainWindow):
             try:
                 if self.ui.pushButton_plot_live_dynamics.isChecked():
                     self.ui.pushButton_plot_live_dynamics.setChecked(False)
+                if self.ui.pushButton_plot_live_acoustic_spectra.isChecked():
+                    self.ui.pushButton_plot_live_acoustic_spectra.setChecked(False)
                 if self.ui.pushButton_plot_live_spectra.isChecked():
                     self.ui.pushButton_plot_live_spectra.setChecked(False)
                 if self.ui.pushButton_long_term_measurements.isChecked():
@@ -202,7 +216,8 @@ class MainWindow(ThreadedMainWindow):
             except Exception:
                 pass
 
-            self._set_active_fanout(None)
+            self._stream_users.clear()
+            self._release_stream(None)
             self.it = None
             self.logText('disconnected from interrogator')
 
@@ -278,8 +293,10 @@ class MainWindow(ThreadedMainWindow):
                 set_parameters(self.it.params, params)
                 self.it.set_gains()
 
-    def set_recording_parameters(self):
+    def set_measurement_parameters(self):
+        """Диалог «Measurement parameters»: параметры записи + акустического анализатора."""
         d = get_parameters(self.params.record)
+        d.update(get_parameters(self.params.acoustic))
         from UIs.recording_parameters_dialogUI import Ui_Dialog
         parameters_dialog = QDialog()
         ui = Ui_Dialog()
@@ -288,6 +305,12 @@ class MainWindow(ThreadedMainWindow):
         if parameters_dialog.exec_() == QDialog.Accepted:
             params = get_widget_values(parameters_dialog)
             set_parameters(self.params.record, params)
+            set_parameters(self.params.acoustic, params)
+            if self._stop_acoustic is not None:
+                self.logText('Acoustic analyzer settings will apply after restarting live acoustic spectra')
+
+    # совместимость со старым именем
+    set_recording_parameters = set_measurement_parameters
 
     def set_long_term_measurements_params(self):
         d = get_parameters(self.params.long_term)
@@ -390,7 +413,7 @@ class MainWindow(ThreadedMainWindow):
                 self.ui.pushButton_plot_live_dynamics.setChecked(False)
                 return
             try:
-                self.it.start_freq_stream(self.params.it.rep_rate)
+                fan = self._acquire_stream('dynamics')
 
                 self._stop_live, self._live_info = start_live_plot_session(
                     it=self.it,
@@ -403,14 +426,14 @@ class MainWindow(ThreadedMainWindow):
                     title_prefix="Live dynamics",
                     use_subplots=True,
                     queue_maxsize=10000,
-                    max_frames_per_update=1200
+                    max_frames_per_update=1200,
+                    fanout=fan,
                 )
-
-                self._set_active_fanout(self._live_info.get("fanout"))
                 self.logText("Live dynamics started")
 
             except Exception as e:
                 self.logWarningText(str(e))
+                self._release_stream('dynamics')
                 try:
                     self.ui.pushButton_plot_live_dynamics.setChecked(False)
                 except Exception:
@@ -425,15 +448,92 @@ class MainWindow(ThreadedMainWindow):
                     self._stop_live = None
                     self._live_info = None
 
-                try:
-                    if self.it is not None:
-                        self.it.stop_freq_stream()
-                except Exception:
-                    pass
-
-                self._set_active_fanout(None)
+                self._release_stream('dynamics')
                 self.logText("Live dynamics stopped")
 
+            except Exception as e:
+                self.logWarningText(str(e))
+
+    # ---------- общий поток кадров для live-окон ----------
+
+    def _acquire_stream(self, user):
+        """Запускает поток кадров интеррогатора (если ещё не запущен) и возвращает общий FrameFanout."""
+        if self._stream_fan is None:
+            self.it.start_freq_stream(self.params.it.rep_rate)
+            fan = FrameFanout(self.it, idle_sleep=0.0002)
+            fan.start()
+            self._stream_fan = fan
+            self._set_active_fanout(fan)
+        self._stream_users.add(user)
+        return self._stream_fan
+
+    def _release_stream(self, user):
+        """Отпускает поток; когда пользователей не осталось — останавливает fanout и поток кадров."""
+        self._stream_users.discard(user)
+        if self._stream_users or self._stream_fan is None:
+            return
+        try:
+            self._stream_fan.stop(timeout=1.0)
+        except Exception:
+            pass
+        self._stream_fan = None
+        try:
+            if self.it is not None:
+                self.it.stop_freq_stream()
+        except Exception:
+            pass
+        self._set_active_fanout(None)
+
+    def plot_live_acoustic_spectra(self, pressed: bool):
+        """
+        Live-спектры акустических шумов: для каждой включённой решётки — Фурье-спектр
+        колебаний её длины волны в скользящем окне (настройки — Measurement parameters).
+        """
+        btn = self.ui.pushButton_plot_live_acoustic_spectra
+        if pressed:
+            if self.it is None:
+                self.logWarningText('Interrogator is not connected')
+                btn.setChecked(False)
+                return
+            try:
+                settings = settings_from_params(self.params.acoustic)
+                fan = self._acquire_stream('acoustic')
+                try:
+                    self._stop_acoustic, _ = start_live_acoustic_session(
+                        fanout=fan,
+                        channels=list(self.params.it.channels),
+                        FBGs=list(self.params.it.FBGs),
+                        settings=settings,
+                        rep_rate_hz=float(self.params.it.rep_rate),
+                        on_error=self.logWarningText,
+                        on_all_closed=lambda: btn.setChecked(False),
+                    )
+                except Exception:
+                    self._release_stream('acoustic')
+                    raise
+                self.logText(
+                    'Live acoustic spectra started: T = {} s (Δf = {:.3g} Hz), {} averages, {}, {}'.format(
+                        settings['fft_window_s'], 1.0 / settings['fft_window_s'],
+                        settings['n_averages'], settings['window'], settings['scale']
+                    )
+                )
+            except Exception as e:
+                self.logWarningText(str(e))
+                self._stop_acoustic = None
+                try:
+                    btn.setChecked(False)
+                except Exception:
+                    pass
+        else:
+            try:
+                if self._stop_acoustic is not None:
+                    try:
+                        self._stop_acoustic()
+                    except Exception:
+                        pass
+                    self._stop_acoustic = None
+                    self._release_stream('acoustic')
+                    self.logText('Live acoustic spectra stopped')
             except Exception as e:
                 self.logWarningText(str(e))
 
@@ -482,6 +582,13 @@ class MainWindow(ThreadedMainWindow):
     def recording(self):
         if self.it is None:
             self.logWarningText('Interrogator is not connected')
+            return
+
+        if self._stream_fan is not None:
+            self.logWarningText(
+                'Stop "Plot live dynamics" / "Plot live acoustic spectra" before recording '
+                '(otherwise the frames would be split between the live plots and the recorder)'
+            )
             return
 
         self._ensure_saving_dir()
@@ -643,24 +750,97 @@ class MainWindow(ThreadedMainWindow):
         except Exception:
             self.logWarningText(traceback.format_exc())
 
-    def _plot_fbgs_file(self, path):
-        times, channels, channel_list, FBGs_list, other_params = read_fbg_stream_raw_lp(path)
+    def _load_fbgs_file(self, path):
+        """Читает .fbgs в self._loaded_* без построения графиков. Возвращает True при успехе."""
+        times, channels, channel_list, FBGs_list, other_params, pkt_ctr = read_fbg_stream_raw_lp(
+            path, with_pkt_ctr=True
+        )
         if len(times) == 0:
             self.logWarningText('No data found in file')
-            return
+            return False
         self.logText(
             'In this file there are channels {} and FBGs {} in these channels'.format(
                 channel_list, FBGs_list
             )
         )
         self._loaded_kind = 'fbgs'
+        self._loaded_path = path
         self._loaded_times = times
         self._loaded_channels = channels
         self._loaded_channel_list = list(channel_list)
         self._loaded_fbgs_list = [list(x) for x in FBGs_list]
+        self._loaded_pkt_ctr = pkt_ctr
         self._update_channel_combo()
-        self._plot_channels_data(times, channels, channel_list, FBGs_list)
         self.logText('Other parameters of the record are {} '.format(other_params))
+        return True
+
+    def _plot_fbgs_file(self, path):
+        if not self._load_fbgs_file(path):
+            return
+        self._plot_channels_data(
+            self._loaded_times, self._loaded_channels,
+            self._loaded_channel_list, self._loaded_fbgs_list
+        )
+
+    def plot_acoustic_spectrogram(self):
+        """Спектрограмма (оконное Фурье) колебаний длины волны выбранной решётки из .fbgs."""
+        path = self.file_to_load_path
+        if not path:
+            self.logWarningText('File is not chosen')
+            return
+        if not os.path.exists(path):
+            self.logWarningText('File does not exist: ' + path)
+            return
+        if os.path.splitext(path)[1].lower() != '.fbgs':
+            self.logWarningText('Acoustic spectrogram is available for .fbgs files only')
+            return
+        try:
+            if self._loaded_kind != 'fbgs' or self._loaded_path != path:
+                sel_ch = self.ui.comboBox_channel_to_plot_static_slice.currentText()
+                sel_fbg = self.ui.comboBox_FBG_to_plot_static_slice.currentText()
+                if not self._load_fbgs_file(path):
+                    return
+                # сохранить выбор пользователя, если такой канал/решётка есть в файле
+                self.ui.comboBox_channel_to_plot_static_slice.setCurrentText(sel_ch)
+                self._update_fbg_combo()
+                self.ui.comboBox_FBG_to_plot_static_slice.setCurrentText(sel_fbg)
+
+            ch = int(self.ui.comboBox_channel_to_plot_static_slice.currentText())
+            fbg = int(self.ui.comboBox_FBG_to_plot_static_slice.currentText())
+            if ch not in self._loaded_channels or fbg not in self._loaded_channels[ch]:
+                self.logWarningText(
+                    'Channel {} / FBG {} not found in file. Available: channels {}, FBGs {}'.format(
+                        ch, fbg, self._loaded_channel_list, self._loaded_fbgs_list
+                    )
+                )
+                return
+
+            settings = settings_from_params(self.params.acoustic)
+            fig, info = plot_spectrogram(
+                self._loaded_times, self._loaded_channels[ch][fbg], settings,
+                pkt_ctr=self._loaded_pkt_ctr,
+                title='{}   ch {}, FBG {}'.format(os.path.basename(path), ch, fbg),
+            )
+            try:
+                fig.canvas.manager.set_window_title(
+                    'Acoustic spectrogram: {} ch {} FBG {}'.format(os.path.basename(path), ch, fbg)
+                )
+            except Exception:
+                pass
+            plt.show(block=False)
+
+            msg = ('Spectrogram ch {} FBG {}: fs ≈ {:.1f} Hz, Δf = {:.3g} Hz, {} columns'
+                   .format(ch, fbg, info['fs'], info['df'], info['n_columns']))
+            if info['group'] > 1:
+                msg += ' ({} windows averaged per column)'.format(info['group'])
+            msg += ', rms = {:.4g} pm'.format(info['rms_pm'])
+            if info['missing_restored']:
+                msg += ', {} lost frames interpolated (by packet counter)'.format(info['missing_restored'])
+            if info['nan_fraction'] > 0:
+                msg += ', NaN {:.2f} % interpolated'.format(100 * info['nan_fraction'])
+            self.logText(msg)
+        except Exception:
+            self.logWarningText(traceback.format_exc())
 
     def _plot_spectrum_file(self, path):
         with open(path, 'rb') as f:
@@ -862,6 +1042,7 @@ class MainWindow(ThreadedMainWindow):
         D['it'] = get_parameters(self.params.it)
         D['recording'] = get_parameters(self.params.record)
         D['long_term'] = get_parameters(self.params.long_term)
+        D['acoustic'] = get_parameters(self.params.acoustic)
         D['main_window'] = get_widget_values(self)
 
         for k in D:
@@ -917,6 +1098,8 @@ class MainWindow(ThreadedMainWindow):
                 set_parameters(self.params.record, Dicts['recording'])
             if 'long_term' in Dicts:
                 set_parameters(self.params.long_term, Dicts['long_term'])
+            if 'acoustic' in Dicts:
+                set_parameters(self.params.acoustic, Dicts['acoustic'])
             if 'main_window' in Dicts:
                 set_widget_values(self, Dicts['main_window'])
 

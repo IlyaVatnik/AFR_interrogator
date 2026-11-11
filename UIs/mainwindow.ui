@@ -41,7 +41,7 @@
              <x>0</x>
              <y>0</y>
              <width>1109</width>
-             <height>211</height>
+             <height>492</height>
             </rect>
            </property>
            <attribute name="label">
@@ -149,8 +149,8 @@
             <rect>
              <x>0</x>
              <y>0</y>
-             <width>831</width>
-             <height>305</height>
+             <width>1109</width>
+             <height>492</height>
             </rect>
            </property>
            <attribute name="label">
@@ -262,7 +262,7 @@
                  </size>
                 </property>
                 <property name="title">
-                 <string>Continuous fast  measurements</string>
+                 <string>Continuous  measurements</string>
                 </property>
                 <widget class="QPushButton" name="pushButton_plot_live_dynamics">
                  <property name="geometry">
@@ -296,11 +296,30 @@
                   <bool>true</bool>
                  </property>
                 </widget>
+                <widget class="QPushButton" name="pushButton_plot_live_acoustic_spectra">
+                 <property name="geometry">
+                  <rect>
+                   <x>390</x>
+                   <y>24</y>
+                   <width>181</width>
+                   <height>23</height>
+                  </rect>
+                 </property>
+                 <property name="toolTip">
+                  <string>Live Fourier spectra of wavelength oscillations of every enabled FBG (settings: Measurement parameters)</string>
+                 </property>
+                 <property name="text">
+                  <string>Plot live acoustic spectra</string>
+                 </property>
+                 <property name="checkable">
+                  <bool>true</bool>
+                 </property>
+                </widget>
                 <widget class="QPushButton" name="pushButton_start_recording">
                  <property name="geometry">
                   <rect>
                    <x>10</x>
-                   <y>52</y>
+                   <y>100</y>
                    <width>181</width>
                    <height>23</height>
                   </rect>
@@ -309,17 +328,17 @@
                   <string>Recording</string>
                  </property>
                 </widget>
-                <widget class="QPushButton" name="pushButton_set_recording_parameters">
+                <widget class="QPushButton" name="pushButton_set_measurement_parameters">
                  <property name="geometry">
                   <rect>
-                   <x>488</x>
-                   <y>50</y>
+                   <x>620</x>
+                   <y>25</y>
                    <width>191</width>
                    <height>23</height>
                   </rect>
                  </property>
                  <property name="text">
-                  <string>Set recording parameters</string>
+                  <string>Measurement parameters</string>
                  </property>
                 </widget>
                </widget>
@@ -376,7 +395,7 @@
              <x>0</x>
              <y>0</y>
              <width>1109</width>
-             <height>250</height>
+             <height>492</height>
             </rect>
            </property>
            <attribute name="label">
@@ -460,6 +479,22 @@
                </property>
                <property name="text">
                 <string>Plot results</string>
+               </property>
+              </widget>
+              <widget class="QPushButton" name="pushButton_plot_acoustic_spectrogram">
+               <property name="geometry">
+                <rect>
+                 <x>470</x>
+                 <y>70</y>
+                 <width>181</width>
+                 <height>31</height>
+                </rect>
+               </property>
+               <property name="toolTip">
+                <string>Short-time Fourier spectrogram of the selected FBG wavelength from a .fbgs file</string>
+               </property>
+               <property name="text">
+                <string>Plot acoustic spectrogram</string>
                </property>
               </widget>
               <widget class="QLabel" name="label_channel_to_save">
